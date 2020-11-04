@@ -12,8 +12,10 @@ rust:
     - stable
 
 before_install:
-    - rustup component add clippy rustfmt
+    - travis_retry rustup component add clippy rustfmt
     - sudo modprobe fuse
+    - sudo modprobe kvm
+    - ls -l /dev/kvm
 
 # override default install
 install:
