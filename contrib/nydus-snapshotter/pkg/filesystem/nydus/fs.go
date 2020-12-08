@@ -46,7 +46,7 @@ type filesystem struct {
 }
 
 // NewFileSystem initialize Filesystem instance
-func NewFileSystem(opt ...NewFSOpt) (snapshot.FileSystem, error) {
+func NewFileSystem(ctx context.Context, opt ...NewFSOpt) (snapshot.FileSystem, error) {
 	var fs filesystem
 	for _, o := range opt {
 		err := o(&fs)
@@ -65,6 +65,9 @@ func NewFileSystem(opt ...NewFSOpt) (snapshot.FileSystem, error) {
 		if err := fs.manager.StartDaemon(d); err != nil {
 			return nil, errors.Wrap(err, "failed to start shared daemon")
 		}
+		if err := fs.WaitUntilReady(ctx, SharedNydusDaemonID); err != nil {
+			return nil, errors.Wrap(err, "failed to wait shared daemon")
+		}
 	}
 	return &fs, nil
 }
@@ -72,6 +75,7 @@ func NewFileSystem(opt ...NewFSOpt) (snapshot.FileSystem, error) {
 func (fs *filesystem) newSharedDaemon() (*daemon.Daemon, error) {
 	d, err := daemon.NewDaemon(
 		daemon.WithID(SharedNydusDaemonID),
+		daemon.WithSnapshotID(SharedNydusDaemonID),
 		daemon.WithSocketDir(fs.SocketRoot()),
 		daemon.WithSnapshotDir(fs.SnapshotRoot()),
 		daemon.WithLogDir(fs.LogRoot()),
@@ -207,7 +211,7 @@ func (fs *filesystem) newDaemon(snapshotID string, imageID string) (*daemon.Daem
 // createNewDaemon create new nydus daemon by snapshotID and imageID
 func (fs *filesystem) createNewDaemon(snapshotID string, imageID string) (*daemon.Daemon, error) {
 	var (
-		d *daemon.Daemon
+		d   *daemon.Daemon
 		err error
 	)
 	if d, err = daemon.NewDaemon(
@@ -233,8 +237,8 @@ func (fs *filesystem) createNewDaemon(snapshotID string, imageID string) (*daemo
 func (fs *filesystem) createSharedDaemon(snapshotID string, imageID string) (*daemon.Daemon, error) {
 	var (
 		sharedDaemon *daemon.Daemon
-		d *daemon.Daemon
-		err error
+		d            *daemon.Daemon
+		err          error
 	)
 	if sharedDaemon, err = fs.manager.GetByID(SharedNydusDaemonID); err != nil {
 		return nil, err

@@ -40,7 +40,7 @@ type filesystem struct {
 	nydusdImageBinaryPath string
 }
 
-func NewFileSystem(opt ...NewFSOpt) (snapshot.FileSystem, error) {
+func NewFileSystem(ctx context.Context, opt ...NewFSOpt) (snapshot.FileSystem, error) {
 	var fs filesystem
 	for _, o := range opt {
 		err := o(&fs)
