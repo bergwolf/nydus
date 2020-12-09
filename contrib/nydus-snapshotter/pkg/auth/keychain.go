@@ -69,8 +69,19 @@ func FromLabels(labels map[string]string) PassKeyChain {
 }
 
 func (kc PassKeyChain) Resolve(target authn.Resource) (authn.Authenticator, error) {
-	return authn.FromConfig(authn.AuthConfig{
-		Username: kc.Username,
-		Password: kc.Password,
-	}), nil
+	return authn.FromConfig(kc.toAuthConfig()), nil
+}
+
+// toAuthConfig convert PassKeyChain to authn.AuthConfig when kc is token based,
+// RegistryToken is preferred to
+func (kc PassKeyChain) toAuthConfig() authn.AuthConfig {
+	if kc.TokenBase() {
+		return authn.AuthConfig{
+			RegistryToken: kc.Password,
+		}
+	}
+	return authn.AuthConfig{
+		Username:      kc.Username,
+		Password:      kc.Password,
+	}
 }
