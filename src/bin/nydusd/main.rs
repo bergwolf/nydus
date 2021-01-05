@@ -144,7 +144,7 @@ fn main() -> Result<()> {
                 .long("config")
                 .help("config file")
                 .takes_value(true)
-                .required(true)
+                .required(false)
                 .min_values(1),
         )
         .arg(
@@ -240,9 +240,6 @@ fn main() -> Result<()> {
     let mountpoint = cmd_arguments.value_of("mountpoint").unwrap_or_default();
     // shared-dir means fs passthrough
     let shared_dir = cmd_arguments.value_of("shared-dir").unwrap_or_default();
-    let config = cmd_arguments
-        .value_of("config")
-        .ok_or_else(|| Error::InvalidArguments("config file is not provided".to_string()))?;
     // bootstrap means rafs only
     let bootstrap = cmd_arguments.value_of("bootstrap").unwrap_or_default();
     // apisock means admin api socket support
@@ -273,10 +270,6 @@ fn main() -> Result<()> {
         ));
     }
 
-    let content =
-        std::fs::read_to_string(config).map_err(|e| Error::InvalidConfig(e.to_string()))?;
-    let rafs_conf: RafsConfig =
-        serde_json::from_str(&content).map_err(|e| Error::InvalidConfig(e.to_string()))?;
     let vfs = Vfs::new(VfsOptions::default());
     if !shared_dir.is_empty() {
         // Vfs by default enables no_open and writeback, passthroughfs
@@ -302,6 +295,13 @@ fn main() -> Result<()> {
             Resource::NOFILE.set(rlimit_nofile, rlimit_nofile)?;
         }
     } else if !bootstrap.is_empty() {
+        let config = cmd_arguments
+            .value_of("config")
+            .ok_or_else(|| Error::InvalidArguments("config file is not provided".to_string()))?;
+        let content =
+            std::fs::read_to_string(config).map_err(|e| Error::InvalidConfig(e.to_string()))?;
+        let rafs_conf: RafsConfig =
+            serde_json::from_str(&content).map_err(|e| Error::InvalidConfig(e.to_string()))?;
         let mut file = Box::new(File::open(bootstrap)?) as Box<dyn rafs::RafsIoRead>;
         let mut rafs = Rafs::new(rafs_conf.clone(), &"/".to_string(), &mut file)?;
         rafs.import(&mut file, Some(prefetch_files))?;
