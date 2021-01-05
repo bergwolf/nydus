@@ -132,9 +132,8 @@ pub fn rafs_mount(
 
                 rafs = match info.config.as_ref() {
                     Some(config) => {
-                        let content = std::fs::read_to_string(config).map_err(|e| einval!(e))?;
                         let rafs_conf: RafsConfig =
-                            serde_json::from_str(&content).map_err(|e| einval!(e))?;
+                            serde_json::from_str(&config).map_err(|e| einval!(e))?;
                         Rafs::new(rafs_conf, &info.mountpoint, &mut file)?
                     }
                     None => Rafs::new(default_rafs_conf.clone(), &info.mountpoint, &mut file)?,
