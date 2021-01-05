@@ -81,7 +81,7 @@ func (kc PassKeyChain) toAuthConfig() authn.AuthConfig {
 		}
 	}
 	return authn.AuthConfig{
-		Username:      kc.Username,
-		Password:      kc.Password,
+		Username: kc.Username,
+		Password: kc.Password,
 	}
 }
