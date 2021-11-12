@@ -86,4 +86,4 @@ jobs:
         chmod +x nydus-static/*
         tar cf - nydus-static | gzip > ${tarball}
         echo "uploading ${tarball} for tag $tag ..."
-        GITHUB_TOKEN=${{ secrets.HUB_UPLOAD_TOKEN }} hub release create -m "Nydus Image Service $tag" -m "Nydus Image Service $tag release" -a "${tarball}" "$tag"
+        GITHUB_TOKEN=${{ secrets.HUB_UPLOAD_TOKEN }} hub release edit -m "Nydus Image Service $tag" -m "Nydus Image Service $tag release" -a "${tarball}" "$tag"
