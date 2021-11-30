@@ -261,6 +261,12 @@ fn main() -> Result<()> {
                         Err("Input thread number is not legal".to_string())
                     }
                 }),
+        )
+        .arg(
+            Arg::with_name("writable")
+                .long("writable")
+                .help("set fuse mountpoint non-readonly")
+                .takes_value(false),
         );
 
     #[cfg(feature = "virtiofs")]
@@ -404,6 +410,7 @@ fn main() -> Result<()> {
             threads,
             apisock,
             cmd_arguments_parsed.is_present("upgrade"),
+            !cmd_arguments_parsed.is_present("writable"),
             p,
             mount_cmd,
             bti,
