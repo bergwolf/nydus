@@ -1,6 +1,6 @@
 [package]
-name = "nydus-rs"
-version = "2.0.0-rc.0"
+name = "my-test-app-bergwolf"
+version = "2.0.1000-rc4"
 authors = ["The Nydus Developers"]
 edition = "2018"
 license = "Apache-2.0 OR BSD-3-Clause"

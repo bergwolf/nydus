@@ -102,3 +102,16 @@ jobs:
         tar cf - nydus-static | gzip > ${tarball}
         echo "uploading ${tarball} for tag $tag ..."
         GITHUB_TOKEN=${{ secrets.HUB_UPLOAD_TOKEN }} hub release create -m "Nydus Image Service $tag" -m "Nydus Image Service $tag release" -a "${tarball}" "$tag"
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Publish
+        run: |
+          sudo apt-get update && sudo apt-get install -y sed
+          cargo install cargo-publish-all
+          cargo-publish-all --token ${{ secrets.CRATES_IO_TOKEN }}
+          VERSION=$(sed -E -n 's/^version = \"(.*)"$/\1/p' Cargo.toml)
+          [ "$GITHUB_REF_NAME" == "v$VERSION" ]
+          cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
