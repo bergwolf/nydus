@@ -36,6 +36,7 @@ jobs:
         rustup component add rustfmt && rustup component add clippy
         make -e ARCH=$arch -e CARGO=cross static-release
         sudo mv target-fusedev/$arch-unknown-linux-musl/release/nydusd nydusd-fusedev
+        sudo mv target-fusedev/$arch-unknown-linux-musl/release/nydus-cached .
         sudo mv target-fusedev/$arch-unknown-linux-musl/release/nydus-image .
         sudo mv target-fusedev/$arch-unknown-linux-musl/release/nydusctl .
         sudo mv target-virtiofs/$arch-unknown-linux-musl/release/nydusd nydusd-virtiofs
@@ -44,13 +45,46 @@ jobs:
     - name: store-artifacts
       uses: actions/upload-artifact@v2
       with:
-        name: nydus-artifacts-${{ matrix.arch }}
+        name: nydus-artifacts-linux-${{ matrix.arch }}
         path: |
           nydusd-fusedev
           nydusd-virtiofs
+          nydus-cached
           nydus-image
           nydusctl
           configs
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v1
+        with:
+          target-dir: |
+            ./target-fusedev
+          cache-on-failure: true
+          key: ${{ runner.os }}-cargo-darwin-amd64
+      - name: build
+        run: |
+          rustup component add rustfmt && rustup component add clippy
+          make static-fusedev
+          sudo mv target-fusedev/x86_64-unknown-linux-musl/release/nydusd nydusd-fusedev
+          sudo mv target-fusedev/$arch-unknown-linux-musl/release/nydus-cached .
+          sudo mv target-fusedev/x86_64-unknown-linux-musl/release/nydus-image .
+          sudo mv target-fusedev/x86_64-unknown-linux-musl/release/nydusctl .
+          sudo cp -r misc/configs .
+          sudo chown -R $(id -un):$(id -gn) . ~/.cargo/
+    - name: store-artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: nydus-artifacts-darwin
+        path: |
+          nydusd-fusedev
+          nydus-cached
+          nydus-image
+          nydusctl
+          configs
+
   build-contrib:
     runs-on: ubuntu-latest
     strategy:
@@ -80,7 +114,7 @@ jobs:
     - name: store-artifacts
       uses: actions/upload-artifact@v2
       with:
-        name: nydus-artifacts-${{ matrix.arch }}
+        name: nydus-artifacts-linux-${{ matrix.arch }}
         path: |
           ctr-remote
           nydus_graphdriver
@@ -92,7 +126,7 @@ jobs:
     strategy:
       matrix:
         arch: [amd64, arm64]
-    needs: [build-nydus-rs, build-contrib]
+    needs: [build-nydus-rs, build-macos, build-contrib]
     steps:
     - uses: actions/checkout@v2
     - name: install hub
@@ -101,20 +135,33 @@ jobs:
         wget -q -O- https://github.com/github/hub/releases/download/v$HUB_VER/hub-linux-amd64-$HUB_VER.tgz | \
         tar xz --strip-components=2 --wildcards '*/bin/hub'
         sudo mv hub /usr/local/bin/hub
-    - name: download artifacts
+    - name: download linux artifacts
       uses: actions/download-artifact@v2
       with:
-        name: nydus-artifacts-${{ matrix.arch }}
-        path: nydus-static
-    - name: upload artifacts
-      if: ${{ github.event_name == 'push' }}
+        name: nydus-artifacts-linux-${{ matrix.arch }}
+        path: nydus-static-linux
+    - name: download darwin artifacts
+      if: ${{ matrix.arch == 'amd64' }}
+      uses: actions/download-artifact@v2
+      with:
+        name: nydus-artifacts-darwin
+        path: nydus-static-darwin
+    - name: prepare linux release artifacts
       run: |
         tag=$(echo $GITHUB_REF | cut -d/ -f3-)
         tarball="nydus-static-$tag-linux-${{ matrix.arch }}.tgz"
-        chmod +x nydus-static/*
-        tar cf - nydus-static | gzip > ${tarball}
+        chmod +x nydus-static-linux/*
+        tar cf - nydus-static-linux | gzip > ${tarball}
         echo "tag=$tag" >> $GITHUB_ENV
         echo "tarball=$tarball" >> $GITHUB_ENV
+    - name: prepare darwin release artifacts
+      if: ${{ matrix.arch == 'amd64' }}
+      run: |
+        tag=$(echo $GITHUB_REF | cut -d/ -f3-)
+        tarball="nydus-static-$tag-darwin-${{ matrix.arch }}.tgz"
+        chmod +x nydus-static-darwin/*
+        tar cf - nydus-static-darwin | gzip > ${tarball}
+        echo "darwin_tarball=$tarball" >> $GITHUB_ENV
     - name: Release
       if: ${{ github.event_name == 'push' }}
       uses: softprops/action-gh-release@v1
@@ -123,3 +170,4 @@ jobs:
         generate_release_notes: true
         files:
           ${{ env.tarball }}
+          ${{ env.darwin_tarball }}
