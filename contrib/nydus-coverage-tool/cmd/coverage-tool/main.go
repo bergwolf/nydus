@@ -274,8 +274,14 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load metadata: %w", err)
 	}
 
-	testFilePath := metadata["generated_tests_path"].(string)
 	originalFilePath := metadata["original_file"].(string)
+
+	// Read coverage analysis for regeneration
+	analysisPath := filepath.Join(outputDir, "coverage_analysis.json")
+	var analysis CoverageAnalysis
+	if err := loadJSON(analysisPath, &analysis); err != nil {
+		return fmt.Errorf("failed to load coverage analysis: %w", err)
+	}
 
 	// Create backup
 	backupPath := originalFilePath + ".backup"
@@ -286,11 +292,47 @@ func runValidate(cmd *cobra.Command, args []string) error {
 
 	success := false
 	var lastErr error
+	actualAttempts := 0
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		actualAttempts = attempt
 		fmt.Printf("\n================================================================================\n")
 		fmt.Printf("Validation Attempt %d/%d\n", attempt, maxRetries)
 		fmt.Printf("================================================================================\n")
+
+		// Generate new tests for each attempt (except the first one which uses existing)
+		if attempt > 1 {
+			fmt.Println("\nRegenerating tests with different seed...")
+			
+			// Read file content
+			content, err := os.ReadFile(backupPath)
+			if err != nil {
+				lastErr = fmt.Errorf("failed to read original file: %w", err)
+				continue
+			}
+
+			// Generate new tests
+			generatedTests, err := callGitHubModelsAPI(string(content), originalFilePath, analysis.Stats)
+			if err != nil {
+				lastErr = fmt.Errorf("failed to regenerate tests: %w", err)
+				continue
+			}
+
+			// Integrate tests into the file
+			updatedContent := integrateTests(string(content), generatedTests)
+
+			// Save updated file
+			testFilePath := filepath.Join(outputDir, "updated_file.rs")
+			if err := os.WriteFile(testFilePath, []byte(updatedContent), 0644); err != nil {
+				lastErr = fmt.Errorf("failed to write updated file: %w", err)
+				continue
+			}
+
+			// Update metadata
+			metadata["generated_tests_path"] = testFilePath
+		}
+
+		testFilePath := metadata["generated_tests_path"].(string)
 
 		// Copy generated file to original location
 		if err := copyFile(testFilePath, originalFilePath); err != nil {
@@ -324,15 +366,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 
 	// Update metadata
 	metadata["validation_success"] = success
-	metadata["validation_attempts"] = maxRetries
-	if !success {
-		metadata["validation_attempts"] = maxRetries
-	} else {
-		for i := 1; i <= maxRetries; i++ {
-			metadata["validation_attempts"] = i
-			break
-		}
-	}
+	metadata["validation_attempts"] = actualAttempts
 
 	if err := saveJSON(metadataPath, metadata); err != nil {
 		return fmt.Errorf("failed to save metadata: %w", err)
@@ -350,7 +384,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	fmt.Println("\n================================================================================")
 	fmt.Println("❌ FAILURE: All validation attempts failed")
 	fmt.Println("================================================================================")
-	return fmt.Errorf("validation failed after %d attempts: %w", maxRetries, lastErr)
+	return fmt.Errorf("validation failed after %d attempts: %w", actualAttempts, lastErr)
 }
 
 func runReport(cmd *cobra.Command, args []string) error {
