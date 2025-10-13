@@ -1,6 +1,6 @@
-# Coverage Improvement Automation Scripts
+# Coverage Improvement Automation
 
-This directory contains scripts used by the automated coverage improvement GitHub Action workflow.
+This directory contains documentation for the automated coverage improvement GitHub Action workflow.
 
 ## Overview
 
@@ -13,48 +13,34 @@ The coverage improvement workflow automatically:
 6. Generates a detailed report
 7. Creates a pull request with the changes
 
-## Scripts
+## Tool Implementation
 
-### analyze_coverage.py
+The core functionality is implemented in Go and located in `contrib/nydus-coverage-tool`.
 
-Runs `cargo llvm-cov` and analyzes the coverage data to find the least covered Rust file.
+### Building the Tool
 
-**Output:**
-- `/tmp/coverage_analysis.json` - Details about the selected file
-- `/tmp/overall_coverage.json` - Overall project coverage statistics
+```bash
+cd contrib/nydus-coverage-tool
+make build
+```
 
-### generate_tests.py
+### Using the Tool
 
-Calls GitHub Models API (gpt-4o-mini) to generate comprehensive unit tests for the target file.
+The coverage tool provides four subcommands:
 
-**Requirements:**
-- `GITHUB_TOKEN` environment variable must be set
+```bash
+# Analyze current coverage
+./contrib/nydus-coverage-tool/cmd/coverage-tool analyze --output-dir /tmp
 
-**Output:**
-- `/tmp/updated_file.rs` - The file with new tests added
-- `/tmp/test_generation_metadata.json` - Metadata about the generation process
+# Generate tests using AI
+./contrib/nydus-coverage-tool/cmd/coverage-tool generate --output-dir /tmp
 
-### validate_tests.py
+# Validate generated tests
+./contrib/nydus-coverage-tool/cmd/coverage-tool validate --output-dir /tmp --max-retries 3
 
-Validates that the generated tests compile and pass. Automatically retries up to 3 times if validation fails.
-
-**Process:**
-1. Creates a backup of the original file
-2. Applies the generated tests
-3. Runs `cargo check` to verify compilation
-4. Runs `cargo test` to verify tests pass
-5. Restores backup if validation fails
-
-**Output:**
-- Updates `/tmp/test_generation_metadata.json` with validation results
-
-### generate_report.py
-
-Generates a comprehensive coverage improvement report comparing before and after metrics.
-
-**Output:**
-- `/tmp/coverage_report.md` - Markdown report for the PR description
-- `/tmp/coverage_stats.json` - Detailed statistics in JSON format
+# Generate coverage report
+./contrib/nydus-coverage-tool/cmd/coverage-tool report --output-dir /tmp
+```
 
 ## Workflow Configuration
 
@@ -63,15 +49,16 @@ The workflow is defined in `.github/workflows/coverage-improvement.yml`.
 ### Trigger
 
 - **Scheduled:** Runs weekly on Mondays at 00:00 UTC
-- **Manual:** Can be triggered via workflow_dispatch
+- **Manual:** Can be triggered via workflow_dispatch with optional parameters
 
-### Requirements
+### Workflow Inputs
 
-- GitHub token with permissions for:
-  - Creating branches
-  - Pushing commits
-  - Creating pull requests
-- Access to GitHub Models API (included with GitHub token)
+When manually triggering the workflow, you can customize:
+
+- `git_user_name`: Git user name for commits (default: "github-actions[bot]")
+- `git_user_email`: Git user email for commits (default: "github-actions[bot]@users.noreply.github.com")
+- `pr_target_repo`: Target repository for PR in owner/repo format (default: current repository)
+- `create_pr`: Whether to create a pull request (default: true)
 
 ### Permissions
 
@@ -79,6 +66,7 @@ The workflow is defined in `.github/workflows/coverage-improvement.yml`.
 permissions:
   contents: write
   pull-requests: write
+  models: read
 ```
 
 ## Usage
@@ -88,32 +76,39 @@ permissions:
 1. Go to the Actions tab in the GitHub repository
 2. Select "Coverage Improvement" workflow
 3. Click "Run workflow"
-4. Select the branch (usually `master`)
+4. (Optional) Configure workflow inputs
 5. Click "Run workflow"
 
 ### Local Testing
 
-You can test individual scripts locally:
+You can test the tool locally:
 
 ```bash
 # Install dependencies
 cargo install cargo-llvm-cov --locked
 rustup component add llvm-tools-preview
-pip install requests
 
-# Run coverage analysis
-python3 .github/scripts/analyze_coverage.py
+# Build the tool
+cd contrib/nydus-coverage-tool
+make build
 
-# Generate tests (requires GITHUB_TOKEN)
+# Run individual steps (requires GITHUB_TOKEN for test generation)
 export GITHUB_TOKEN=your_token_here
-python3 .github/scripts/generate_tests.py
-
-# Validate tests
-python3 .github/scripts/validate_tests.py
-
-# Generate report
-python3 .github/scripts/generate_report.py
+./cmd/coverage-tool analyze --output-dir /tmp
+./cmd/coverage-tool generate --output-dir /tmp
+./cmd/coverage-tool validate --output-dir /tmp --max-retries 3
+./cmd/coverage-tool report --output-dir /tmp
 ```
+
+## Output Files
+
+The tool generates these files in the output directory (default: /tmp):
+
+- `coverage_analysis.json` - Initial coverage data and selected file
+- `overall_coverage.json` - Overall project coverage statistics
+- `updated_file.rs` - The file with new tests added
+- `test_generation_metadata.json` - Metadata about generation and validation
+- `coverage_report.md` - Final coverage improvement report
 
 ## Limitations
 
@@ -122,36 +117,34 @@ python3 .github/scripts/generate_report.py
 - Complex files with many dependencies may produce tests that fail validation
 - The workflow has a 120-minute timeout
 
-## Troubleshooting
+## Best Practices
 
-### Tests Fail Validation
+1. **Review PRs Thoroughly**: Automated tests should be reviewed like any other code
+2. **Enhance Generated Tests**: Use AI-generated tests as a starting point
+3. **Monitor Success Rate**: Track which types of files work well
+4. **Combine with Manual Work**: Use this workflow to handle easy cases, write complex tests manually
 
-If generated tests fail validation after 3 attempts, the workflow will fail and no PR will be created. Check the workflow logs for details.
+## Advanced Configuration
 
-### Coverage Not Improving
+### Change Selection Criteria
 
-Sometimes the generated tests may not significantly improve coverage. This can happen if:
-- The uncovered code is hard to reach (e.g., error handling paths)
-- The code requires complex setup or mocking
-- The AI model misunderstands the code structure
+Edit the `extractFileCoverage` function in `contrib/nydus-coverage-tool/cmd/coverage-tool/main.go` to change how files are selected.
 
-### API Rate Limits
+### Customize PR Labels
 
-GitHub Models API has rate limits. If you encounter rate limit errors, wait and try again later.
+Edit `.github/workflows/coverage-improvement.yml`:
+```yaml
+--label "your-custom-label" \
+--label "another-label"
+```
 
-## Future Improvements
+### Change Schedule
 
-Potential enhancements:
-- Support for processing multiple files in one run
-- Iterative test generation with feedback loop
-- Integration with code review tools
-- Custom prompts for different file types
-- Support for integration tests in addition to unit tests
-
-## Contributing
-
-To improve these scripts:
-1. Test changes locally first
-2. Update this README if adding new scripts or changing behavior
-3. Follow Python best practices and add error handling
-4. Ensure scripts work in the GitHub Actions environment
+Edit the cron expression in the workflow:
+```yaml
+schedule:
+  - cron: '0 0 * * 1'  # Weekly on Monday
+  # Examples:
+  # '0 */6 * * *'      # Every 6 hours
+  # '0 0 1 * *'        # Monthly on the 1st
+```
