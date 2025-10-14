@@ -101,11 +101,14 @@ var (
 
 	outputDir  string
 	maxRetries int
+	modelName  string
 )
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&outputDir, "output-dir", "/tmp", "Directory for output files")
 	validateCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum validation retry attempts")
+	generateCmd.Flags().StringVar(&modelName, "model", "gpt-4.1-mini", "AI model to use for test generation")
+	validateCmd.Flags().StringVar(&modelName, "model", "gpt-4.1-mini", "AI model to use for test generation")
 
 	rootCmd.AddCommand(analyzeCmd)
 	rootCmd.AddCommand(generateCmd)
@@ -235,7 +238,7 @@ func generateTests() error {
 	fmt.Printf("Collected %d files from the module for context\n\n", len(moduleFiles))
 
 	// Generate tests using GitHub Models API
-	generatedTests, err := callGitHubModelsAPI(string(content), filename, analysis.Stats, moduleFiles)
+	generatedTests, err := callGitHubModelsAPI(string(content), filename, analysis.Stats, moduleFiles, modelName)
 	if err != nil {
 		return fmt.Errorf("failed to generate tests: %w", err)
 	}
@@ -260,6 +263,7 @@ func generateTests() error {
 		"original_file":        filename,
 		"generated_tests_path": outputPath,
 		"coverage_before":      coverage,
+		"model":                modelName,
 	}
 
 	metadataPath := filepath.Join(outputDir, "test_generation_metadata.json")
@@ -288,6 +292,11 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	}
 
 	originalFilePath := metadata["original_file"].(string)
+
+	// Use model from metadata if available and not overridden by CLI flag
+	if savedModel, ok := metadata["model"].(string); ok && modelName == "gpt-4.1-mini" {
+		modelName = savedModel
+	}
 
 	// Read coverage analysis for regeneration
 	analysisPath := filepath.Join(outputDir, "coverage_analysis.json")
@@ -571,7 +580,7 @@ func collectModuleFiles(targetFile string) (map[string]string, error) {
 	return moduleFiles, nil
 }
 
-func callGitHubModelsAPI(fileContent, filepath string, stats map[string]interface{}, moduleFiles map[string]string) (string, error) {
+func callGitHubModelsAPI(fileContent, filepath string, stats map[string]interface{}, moduleFiles map[string]string, modelName string) (string, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
 		return "", fmt.Errorf("GITHUB_TOKEN environment variable not set")
@@ -621,7 +630,7 @@ Format your response as:
 `+"```rust\n// Your test code here\n```", coverage, covered, total, filepath, fileContent, moduleContext)
 
 	requestBody := map[string]interface{}{
-		"model": "gpt-4.1-mini",
+		"model": modelName,
 		"messages": []map[string]string{
 			{
 				"role":    "system",
@@ -739,6 +748,12 @@ func generateMarkdownReport(targetFile string, beforeStats map[string]interface{
 	validationSuccess := metadata["validation_success"].(bool)
 	validationAttempts := metadata["validation_attempts"].(float64)
 
+	// Get model name from metadata, default to gpt-4.1-mini if not present
+	modelName := "gpt-4.1-mini"
+	if model, ok := metadata["model"].(string); ok {
+		modelName = model
+	}
+
 	successIcon := "✅ Success"
 	if !validationSuccess {
 		successIcon = "❌ Failed"
@@ -773,7 +788,7 @@ This automated workflow has successfully generated and validated new unit tests 
 
 - **Validation Attempts:** %.0f
 - **Validation Status:** %s
-- **Test Generation Method:** GitHub Models API (gpt-4.1-mini)
+- **Test Generation Method:** GitHub Models API (%s)
 
 ## Next Steps
 
@@ -792,7 +807,7 @@ This PR contains automatically generated unit tests. Please review the tests to 
 		afterCoverage.Functions["covered"], afterCoverage.Functions["count"],
 		beforeOverall.AverageCoverage, afterOverall.AverageCoverage, overallImprovement,
 		beforeOverall.TotalFiles, afterOverall.TotalFiles,
-		validationAttempts, successIcon)
+		validationAttempts, successIcon, modelName)
 
 	return report
 }

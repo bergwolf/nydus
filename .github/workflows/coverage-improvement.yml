@@ -25,6 +25,10 @@ name: Coverage Improvement
         required: false
         default: "true"
         type: boolean
+      model:
+        description: "AI model to use for test generation"
+        required: false
+        default: "gpt-4.1-mini"
 
 permissions:
   contents: write
@@ -106,7 +110,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          contrib/nydus-coverage-tool/coverage-tool generate --output-dir /tmp
+          MODEL_FLAG=""
+          if [ -n "${{ inputs.model }}" ]; then
+            MODEL_FLAG="--model ${{ inputs.model }}"
+          fi
+          
+          contrib/nydus-coverage-tool/coverage-tool generate --output-dir /tmp $MODEL_FLAG
 
           # Check if generation succeeded
           if [ ! -f /tmp/test_generation_metadata.json ]; then
@@ -119,8 +128,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         id: validate
         run: |
+          MODEL_FLAG=""
+          if [ -n "${{ inputs.model }}" ]; then
+            MODEL_FLAG="--model ${{ inputs.model }}"
+          fi
+          
           contrib/nydus-coverage-tool/coverage-tool validate \
-            --output-dir /tmp --max-retries 3
+            --output-dir /tmp --max-retries 3 $MODEL_FLAG
 
           # Check validation result
           SUCCESS=$(jq -r '.validation_success' \
