@@ -16,12 +16,12 @@ func TestCollectModuleFiles(t *testing.T) {
 
 	// Create test files
 	testFiles := map[string]string{
-		"target.rs":     "// Target file\npub fn target() {}",
-		"mod.rs":        "// Module file\nmod target;",
-		"helper.rs":     "// Helper file\npub fn helper() {}",
-		"another.rs":    "// Another file\npub fn another() {}",
-		"test_file.rs":  "// Test file - should be skipped\n#[test]\nfn test() {}",
-		"README.md":     "# README - should be skipped",
+		"target.rs":    "// Target file\npub fn target() {}",
+		"mod.rs":       "// Module file\nmod target;",
+		"helper.rs":    "// Helper file\npub fn helper() {}",
+		"another.rs":   "// Another file\npub fn another() {}",
+		"test_file.rs": "// Test file - should be skipped\n#[test]\nfn test() {}",
+		"README.md":    "# README - should be skipped",
 	}
 
 	for name, content := range testFiles {

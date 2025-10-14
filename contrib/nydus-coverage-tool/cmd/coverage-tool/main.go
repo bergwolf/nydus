@@ -521,40 +521,40 @@ func extractFileCoverage(data *CoverageData) []FileStats {
 // to provide context for test generation
 func collectModuleFiles(targetFile string) (map[string]string, error) {
 	moduleFiles := make(map[string]string)
-	
+
 	// Get the directory of the target file
 	dir := filepath.Dir(targetFile)
 	targetBase := filepath.Base(targetFile)
-	
+
 	// Read all files in the same directory
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory: %w", err)
 	}
-	
+
 	// Collect Rust source files (excluding the target file and test files)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		
+
 		name := entry.Name()
-		
+
 		// Skip the target file itself
 		if name == targetBase {
 			continue
 		}
-		
+
 		// Only include .rs files
 		if !strings.HasSuffix(name, ".rs") {
 			continue
 		}
-		
+
 		// Skip test files
 		if strings.HasSuffix(name, "_test.rs") || strings.Contains(name, "test") {
 			continue
 		}
-		
+
 		// Read file content
 		fullPath := filepath.Join(dir, name)
 		content, err := os.ReadFile(fullPath)
@@ -563,11 +563,11 @@ func collectModuleFiles(targetFile string) (map[string]string, error) {
 			fmt.Printf("Warning: failed to read %s: %v\n", fullPath, err)
 			continue
 		}
-		
+
 		// Add to module files with relative path for clarity
 		moduleFiles[name] = string(content)
 	}
-	
+
 	return moduleFiles, nil
 }
 
