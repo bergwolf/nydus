@@ -633,7 +633,6 @@ Format your response as:
 			},
 		},
 		"temperature": 0.7,
-		"max_tokens":  8000,
 	}
 
 	jsonData, err := json.Marshal(requestBody)

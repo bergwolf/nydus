@@ -48,7 +48,6 @@ export GITHUB_TOKEN=your_token_here
 **Features:**
 - Collects entire module context (all `.rs` files in the same directory)
 - Sends module context to AI to generate more accurate tests
-- Uses up to 8000 tokens for comprehensive test generation
 
 **Output:**
 - `/tmp/updated_file.rs` - File with generated tests
