@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -152,8 +153,8 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		fmt.Printf("    Lines: %d/%d\n", fs.Covered, fs.Total)
 	}
 
-	// Select least covered file
-	leastCovered := fileStats[0]
+	// Select one random least covered file
+	leastCovered := fileStats[rand.Intn(len(fileStats)/10+1)]
 
 	fmt.Println("\n================================================================================")
 	fmt.Println("Least covered file selected for improvement:")
@@ -475,16 +476,21 @@ func runReport(cmd *cobra.Command, args []string) error {
 // Helper functions
 
 func runCoverage() (*CoverageData, error) {
-	cmd := exec.Command("make", "coverage")
-	cmd.Dir = "/home/runner/work/nydus/nydus"
+	cmd := exec.Command("make", "coverage-summary")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("failed to run coverage command: %w", err)
+	}
 
-	output, err := cmd.CombinedOutput()
+	covFile := "codecov.json"
+	content, err := os.ReadFile(covFile)
 	if err != nil {
-		return nil, fmt.Errorf("cargo llvm-cov failed: %w, output: %s", err, string(output))
+		return nil, fmt.Errorf("failed to read coverage file: %w", err)
 	}
 
 	var data CoverageData
-	if err := json.Unmarshal(output, &data); err != nil {
+	if err := json.Unmarshal(content, &data); err != nil {
 		return nil, fmt.Errorf("failed to parse coverage JSON: %w", err)
 	}
 
@@ -756,7 +762,6 @@ This PR contains automatically generated unit tests. Please review the tests to 
 
 func runCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
-	cmd.Dir = "/home/runner/work/nydus/nydus"
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
