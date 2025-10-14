@@ -202,7 +202,7 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runGenerate(cmd *cobra.Command, args []string) error {
+func generateTests() error {
 	fmt.Println("================================================================================")
 	fmt.Println("Generating Unit Tests")
 	fmt.Println("================================================================================")
@@ -263,6 +263,10 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runGenerate(cmd *cobra.Command, args []string) error {
+	return generateTests()
+}
+
 func runValidate(cmd *cobra.Command, args []string) error {
 	fmt.Println("================================================================================")
 	fmt.Println("Validating Generated Tests")
@@ -301,38 +305,6 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Validation Attempt %d/%d\n", attempt, maxRetries)
 		fmt.Printf("================================================================================\n")
 
-		// Generate new tests for each attempt (except the first one which uses existing)
-		if attempt > 1 {
-			fmt.Println("\nRegenerating tests with different seed...")
-
-			// Read file content
-			content, err := os.ReadFile(backupPath)
-			if err != nil {
-				lastErr = fmt.Errorf("failed to read original file: %w", err)
-				continue
-			}
-
-			// Generate new tests
-			generatedTests, err := callGitHubModelsAPI(string(content), originalFilePath, analysis.Stats)
-			if err != nil {
-				lastErr = fmt.Errorf("failed to regenerate tests: %w", err)
-				continue
-			}
-
-			// Integrate tests into the file
-			updatedContent := integrateTests(string(content), generatedTests)
-
-			// Save updated file
-			testFilePath := filepath.Join(outputDir, "updated_file.rs")
-			if err := os.WriteFile(testFilePath, []byte(updatedContent), 0644); err != nil {
-				lastErr = fmt.Errorf("failed to write updated file: %w", err)
-				continue
-			}
-
-			// Update metadata
-			metadata["generated_tests_path"] = testFilePath
-		}
-
 		testFilePath := metadata["generated_tests_path"].(string)
 
 		// Copy generated file to original location
@@ -343,23 +315,17 @@ func runValidate(cmd *cobra.Command, args []string) error {
 
 		// Run cargo check
 		fmt.Println("\nRunning cargo check...")
-		if err := runCommand("cargo", "check", "--workspace"); err != nil {
-			fmt.Println("❌ Compilation failed!")
+		if err := runCommand("make", "ut"); err != nil {
+			fmt.Println("❌ UT failed!")
 			lastErr = err
 			copyFile(backupPath, originalFilePath) // Restore backup
+			// Regenerate tests
+			if err := generateTests(); err != nil {
+				return fmt.Errorf("failed to regenerate tests: %w", err)
+			}
 			continue
 		}
-		fmt.Println("✅ Compilation successful!")
-
-		// Run tests
-		fmt.Println("\nRunning tests...")
-		if err := runCommand("cargo", "test", "--workspace", "--", "--skip", "integration", "--nocapture"); err != nil {
-			fmt.Println("❌ Tests failed!")
-			lastErr = err
-			copyFile(backupPath, originalFilePath) // Restore backup
-			continue
-		}
-		fmt.Println("✅ All tests passed!")
+		fmt.Println("✅ UT successful!")
 
 		success = true
 		break

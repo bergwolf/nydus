@@ -1,29 +1,29 @@
 ---
 name: Coverage Improvement
 
-'on':
+"on":
   # Run weekly on Mondays at 00:00 UTC
   schedule:
-    - cron: '0 0 * * 1'
+    - cron: "0 0 * * 1"
   # Allow manual trigger
   workflow_dispatch:
     inputs:
       git_user_name:
-        description: 'Git user name for commits'
+        description: "Git user name for commits"
         required: false
-        default: 'github-actions[bot]'
+        default: "github-actions[bot]"
       git_user_email:
-        description: 'Git user email for commits'
+        description: "Git user email for commits"
         required: false
-        default: 'github-actions[bot]@users.noreply.github.com'
+        default: "github-actions[bot]@users.noreply.github.com"
       pr_target_repo:
-        description: 'Target repository for PR (owner/repo format)'
+        description: "Target repository for PR (owner/repo format)"
         required: false
-        default: ''
+        default: ""
       create_pr:
-        description: 'Whether to create a pull request'
+        description: "Whether to create a pull request"
         required: false
-        default: 'true'
+        default: "true"
         type: boolean
 
 permissions:
@@ -66,7 +66,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.work'
+          go-version-file: "go.work"
           cache-dependency-path: "**/*.sum"
 
       - name: Build coverage tool
@@ -115,6 +115,8 @@ jobs:
           fi
 
       - name: Validate and apply tests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         id: validate
         run: |
           contrib/nydus-coverage-tool/coverage-tool validate \
