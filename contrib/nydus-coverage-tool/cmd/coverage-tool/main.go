@@ -621,7 +621,7 @@ Format your response as:
 `+"```rust\n// Your test code here\n```", coverage, covered, total, filepath, fileContent, moduleContext)
 
 	requestBody := map[string]interface{}{
-		"model": "gpt-4o-mini",
+		"model": "gpt-4.1-mini",
 		"messages": []map[string]string{
 			{
 				"role":    "system",
@@ -774,7 +774,7 @@ This automated workflow has successfully generated and validated new unit tests 
 
 - **Validation Attempts:** %.0f
 - **Validation Status:** %s
-- **Test Generation Method:** GitHub Models API (gpt-4o-mini)
+- **Test Generation Method:** GitHub Models API (gpt-4.1-mini)
 
 ## Next Steps
 

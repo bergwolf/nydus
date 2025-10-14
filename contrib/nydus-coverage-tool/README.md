@@ -4,7 +4,7 @@ A command-line tool for automated test coverage improvement using AI-powered tes
 
 ## Overview
 
-This tool analyzes Rust code coverage, generates unit tests using GitHub Models API (gpt-4o-mini), validates the tests, and produces detailed coverage reports.
+This tool analyzes Rust code coverage, generates unit tests using GitHub Models API (gpt-4.1-mini), validates the tests, and produces detailed coverage reports.
 
 **Key Feature**: When generating tests, the tool automatically collects all Rust source files in the same module directory to provide proper context to the AI model. This helps generate more accurate and contextually appropriate tests that understand the module's types, traits, and dependencies.
 
