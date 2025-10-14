@@ -220,14 +220,22 @@ func generateTests() error {
 	fmt.Printf("Target file: %s\n", filename)
 	fmt.Printf("Current coverage: %.2f%%\n\n", coverage)
 
-	// Read file content
+	// Read target file content
 	content, err := os.ReadFile(filename)
 	if err != nil {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
+	// Collect module context (all files in the same module)
+	moduleFiles, err := collectModuleFiles(filename)
+	if err != nil {
+		return fmt.Errorf("failed to collect module files: %w", err)
+	}
+
+	fmt.Printf("Collected %d files from the module for context\n\n", len(moduleFiles))
+
 	// Generate tests using GitHub Models API
-	generatedTests, err := callGitHubModelsAPI(string(content), filename, analysis.Stats)
+	generatedTests, err := callGitHubModelsAPI(string(content), filename, analysis.Stats, moduleFiles)
 	if err != nil {
 		return fmt.Errorf("failed to generate tests: %w", err)
 	}
@@ -509,7 +517,61 @@ func extractFileCoverage(data *CoverageData) []FileStats {
 	return stats
 }
 
-func callGitHubModelsAPI(fileContent, filepath string, stats map[string]interface{}) (string, error) {
+// collectModuleFiles collects all Rust files in the same module directory
+// to provide context for test generation
+func collectModuleFiles(targetFile string) (map[string]string, error) {
+	moduleFiles := make(map[string]string)
+	
+	// Get the directory of the target file
+	dir := filepath.Dir(targetFile)
+	targetBase := filepath.Base(targetFile)
+	
+	// Read all files in the same directory
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory: %w", err)
+	}
+	
+	// Collect Rust source files (excluding the target file and test files)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		
+		name := entry.Name()
+		
+		// Skip the target file itself
+		if name == targetBase {
+			continue
+		}
+		
+		// Only include .rs files
+		if !strings.HasSuffix(name, ".rs") {
+			continue
+		}
+		
+		// Skip test files
+		if strings.HasSuffix(name, "_test.rs") || strings.Contains(name, "test") {
+			continue
+		}
+		
+		// Read file content
+		fullPath := filepath.Join(dir, name)
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			// Log warning but continue
+			fmt.Printf("Warning: failed to read %s: %v\n", fullPath, err)
+			continue
+		}
+		
+		// Add to module files with relative path for clarity
+		moduleFiles[name] = string(content)
+	}
+	
+	return moduleFiles, nil
+}
+
+func callGitHubModelsAPI(fileContent, filepath string, stats map[string]interface{}, moduleFiles map[string]string) (string, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
 		return "", fmt.Errorf("GITHUB_TOKEN environment variable not set")
@@ -519,19 +581,28 @@ func callGitHubModelsAPI(fileContent, filepath string, stats map[string]interfac
 	covered := int(stats["covered"].(float64))
 	total := int(stats["total"].(float64))
 
+	// Build module context section
+	moduleContext := ""
+	if len(moduleFiles) > 0 {
+		moduleContext = "\n\nHere are other files in the same module for context:\n\n"
+		for path, content := range moduleFiles {
+			moduleContext += fmt.Sprintf("File: %s\n```rust\n%s\n```\n\n", path, content)
+		}
+	}
+
 	prompt := fmt.Sprintf(`You are an expert Rust developer tasked with writing comprehensive unit tests.
 
 I have a Rust source file that currently has %.2f%% test coverage (%d/%d lines covered).
 
-File path: %s
+Target file path: %s
 
-Here is the file content:
+Here is the target file content:
 
-`+"```rust\n%s\n```"+`
+`+"```rust\n%s\n```"+`%s
 
-Please generate comprehensive unit tests for this file following these requirements:
+Please generate comprehensive unit tests for the TARGET FILE following these requirements:
 
-1. Focus on testing the most critical and complex functions that are currently uncovered
+1. Focus on testing the most critical and complex functions that are currently uncovered in the TARGET FILE
 2. Write tests that follow Rust best practices and conventions
 3. Include tests for:
    - Normal/happy path cases
@@ -542,11 +613,12 @@ Please generate comprehensive unit tests for this file following these requireme
 5. Make sure tests are self-contained and don't require external dependencies when possible
 6. Follow the coding style and patterns already present in the file
 7. Add descriptive test names that clearly indicate what is being tested
+8. Use the context from other module files to understand types, traits, and dependencies
 
-Please provide ONLY the test code that should be added to the existing #[cfg(test)] mod tests section, or a complete new test module if none exists. Do not include the entire file, just the test code to be added.
+Please provide ONLY the test code that should be added to the existing #[cfg(test)] mod tests section of the TARGET FILE, or a complete new test module if none exists. Do not include the entire file, just the test code to be added.
 
 Format your response as:
-`+"```rust\n// Your test code here\n```", coverage, covered, total, filepath, fileContent)
+`+"```rust\n// Your test code here\n```", coverage, covered, total, filepath, fileContent, moduleContext)
 
 	requestBody := map[string]interface{}{
 		"model": "gpt-4o-mini",
@@ -561,7 +633,7 @@ Format your response as:
 			},
 		},
 		"temperature": 0.7,
-		"max_tokens":  4000,
+		"max_tokens":  8000,
 	}
 
 	jsonData, err := json.Marshal(requestBody)
@@ -717,7 +789,7 @@ This PR contains automatically generated unit tests. Please review the tests to 
 		targetFile,
 		beforeCov, afterCoverage.Coverage, fileImprovement,
 		beforeCovered, beforeTotal, afterCoverage.Covered, afterCoverage.Total, linesImprovement,
-		beforeStats["functions"].(map[string]interface{})["covered"].(float64), beforeStats["functions"].(map[string]interface{})["count"].(float64),
+		int(beforeStats["functions"].(map[string]interface{})["covered"].(float64)), int(beforeStats["functions"].(map[string]interface{})["count"].(float64)),
 		afterCoverage.Functions["covered"], afterCoverage.Functions["count"],
 		beforeOverall.AverageCoverage, afterOverall.AverageCoverage, overallImprovement,
 		beforeOverall.TotalFiles, afterOverall.TotalFiles,
