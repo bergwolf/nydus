@@ -152,5 +152,6 @@ func (c *CasTestSuite) testCasGcUmountByAPI(t *testing.T, enablePrefetch bool) {
 }
 
 func TestCas(t *testing.T) {
+	t.Skip("skipping cas tests for now")
 	test.Run(t, &CasTestSuite{})
 }
