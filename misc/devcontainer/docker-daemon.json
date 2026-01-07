@@ -1,0 +1,7 @@
+{
+  "registry-mirrors": [
+	"https://mirror.gcr.io",
+	"https://mirrors-ssl.aliyuncs.com/",
+	"http://ec2-54-169-111-205.ap-southeast-1.compute.amazonaws.com:7939"
+  ]
+}

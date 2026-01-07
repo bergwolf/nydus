@@ -1,0 +1,23 @@
+[source.crates-io]
+registry = "https://github.com/rust-lang/crates.io-index"
+replace-with = 'rsproxy-sparse'
+[source.ustc]
+registry = "git://mirrors.ustc.edu.cn/crates.io-index"
+[source.gitlab]
+registry = "http://gitlab.alibaba-inc.com/xianyou.cyq/crates.io-index.git"
+[source.rustcc]
+registry = "https://code.aliyun.com/rustcc/crates.io-index.git"
+[source.rsproxy]
+registry = "https://rsproxy.cn/crates.io-index"
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+[registries.rsproxy]
+index = "https://rsproxy.cn/crates.io-index"
+
+#[source.thu]
+#registry = "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git"
+
+[net]
+git-fetch-with-cli = true
+[http]
+multiplexing = false
