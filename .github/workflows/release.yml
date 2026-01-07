@@ -82,7 +82,7 @@ jobs:
           configs
 
   nydus-macos:
-    runs-on: macos-13
+    runs-on: macos-15
     strategy:
       matrix:
         arch: [amd64, arm64]
@@ -101,10 +101,10 @@ jobs:
         else
           RUST_TARGET="aarch64-apple-darwin"
         fi
-        cargo install --version 0.2.5 cross
         rustup target add ${RUST_TARGET}
-        make -e RUST_TARGET_STATIC=$RUST_TARGET -e CARGO=cross static-release
-        sudo mv target/$RUST_TARGET/release/nydusd nydusd
+        make -e RUST_TARGET_STATIC=$RUST_TARGET static-release
+        sudo mv target/$RUST_TARGET/release/nydusd .
+        sudo mv target/$RUST_TARGET/release/nydusctl .
         sudo cp -r misc/configs .
         sudo chown -R $(id -un):$(id -gn) . ~/.cargo/
     - name: store-artifacts
@@ -114,7 +114,6 @@ jobs:
         path: |
           nydusctl
           nydusd
-          nydus-image
           configs
 
   contrib-linux:
