@@ -153,7 +153,7 @@ contrib-lint: nydusify-lint nydus-overlayfs-lint
 
 contrib-clean: nydusify-clean nydus-overlayfs-clean
 
-contrib-install:
+contrib-install: contrib-release
 	@sudo mkdir -m 755 -p $(INSTALL_DIR_PREFIX)
 	@sudo install -m 755 contrib/nydus-overlayfs/bin/nydus-overlayfs $(INSTALL_DIR_PREFIX)/nydus-overlayfs
 	@sudo install -m 755 contrib/nydusify/cmd/nydusify $(INSTALL_DIR_PREFIX)/nydusify
