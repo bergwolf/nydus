@@ -53,4 +53,8 @@ WORKDIR /nydus
 
 COPY stop-service.sh /stop-service.sh
 COPY entrypoint.sh /entrypoint.sh
+
+# drop secure_path from sudoers
+RUN sed -ie 's/.*secure_path.*//g' /etc/sudoers
+
 ENTRYPOINT ["/entrypoint.sh"]
