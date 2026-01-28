@@ -116,19 +116,6 @@ ut-nextest: .release_version
 miri-ut-nextest: .release_version
 	MIRIFLAGS=-Zmiri-disable-isolation TEST_WORKDIR_PREFIX=$(TEST_WORKDIR_PREFIX) RUST_BACKTRACE=1 ${RUSTUP} run nightly cargo miri nextest run --no-fail-fast --filter-expr 'test(test) - test(integration) - test(deduplicate::tests) - test(inode_bitmap::tests::test_inode_bitmap)' --workspace $(EXCLUDE_PACKAGES) $(CARGO_COMMON) $(CARGO_BUILD_FLAGS)
 
-# install test dependencies
-pre-coverage:
-	${CARGO} +stable install cargo-llvm-cov --locked
-	${RUSTUP} component add llvm-tools-preview
-
-# print unit test coverage to console
-coverage: pre-coverage
-	TEST_WORKDIR_PREFIX=$(TEST_WORKDIR_PREFIX) ${CARGO} llvm-cov --workspace $(EXCLUDE_PACKAGES) $(CARGO_COMMON) $(CARGO_BUILD_FLAGS) -- --skip integration --nocapture  --test-threads=8
-
-# write unit teset coverage to codecov.json, used for Github CI
-coverage-codecov:
-	TEST_WORKDIR_PREFIX=$(TEST_WORKDIR_PREFIX) ${RUSTUP} run stable cargo llvm-cov --codecov --output-path codecov.json --workspace $(EXCLUDE_PACKAGES) $(CARGO_COMMON) $(CARGO_BUILD_FLAGS) -- --skip integration --nocapture --test-threads=8
-
 smoke-only:
 	make -C smoke test
 
@@ -142,6 +129,54 @@ smoke-takeover:
 	make -C smoke test-takeover
 
 smoke: release smoke-only
+
+# Reuse the target dir for coverage binaries
+COVERAGE_TARGET_DIR := target
+LLVM_PROFILE_FILE_DIR := $(PWD)/coverage/
+LLVM_PROFILE_FILE_UT_PATH := $(LLVM_PROFILE_FILE_DIR)/ut-%p-%m.profraw
+LLVM_PROFILE_FILE_SMOKE_PATH := $(LLVM_PROFILE_FILE_DIR)/smoke-%p-%m.profraw
+GRCOV_ARGS := --binary-path $(COVERAGE_TARGET_DIR)/debug/ -s . \
+	      --branch --ignore-not-existing \
+	      --ignore '*/.rustup/*' --ignore '*/rustup/*' \
+	      --ignore '*/.cargo/*' --ignore '*/cargo/*'
+CARGO_TEST_FLAGS :=
+
+.coverage_args:
+	$(eval CARGO_TEST_FLAGS += RUSTFLAGS='-C instrument-coverage')
+	$(eval CARGO_TEST_FLAGS += TEST_WORKDIR_PREFIX=$(TEST_WORKDIR_PREFIX) )
+
+# Install coverage tools
+coverage-tools:
+	${CARGO} install grcov --locked
+	${RUSTUP} component add llvm-tools-preview
+
+build-coverage:
+	@echo "==> Building with coverage instrumentation..."
+	RUSTFLAGS='-C instrument-coverage' ${CARGO} build $(CARGO_COMMON) $(CARGO_BUILD_FLAGS) --target-dir $(COVERAGE_TARGET_DIR)
+
+# Unit test coverage (using grcov)
+ut-coverage: coverage-tools .coverage_args build-coverage
+	@echo "==> Running unit tests with coverage..."
+	rm -rf coverage/
+	$(CARGO_TEST_FLAGS) LLVM_PROFILE_FILE=$(LLVM_PROFILE_FILE_UT_PATH) \
+		${CARGO} test --target-dir $(COVERAGE_TARGET_DIR) --workspace \
+		$(EXCLUDE_PACKAGES) $(CARGO_COMMON) -- --skip integration --nocapture --test-threads=8
+	@echo "==> Generating unit test coverage report..."
+	grcov coverage/ut-*.profraw -t markdown $(GRCOV_ARGS) --output-path coverage/ut-coverage.md
+	@echo "==> Unit test coverage report generated at coverage/ut-coverage.md"
+
+# Smoke test coverage (using grcov for external process coverage)
+smoke-coverage: coverage-tools build-coverage
+	make -C smoke coverage GRCOV_ARGS="$(GRCOV_ARGS)" LLVM_PROFILE_FILE=$(LLVM_PROFILE_FILE_SMOKE_PATH) \
+		COVERAGE_TARGET_DIR=$(PWD)/$(COVERAGE_TARGET_DIR)
+
+# Combined coverage (merges ut-coverage and smoke-coverage results)
+# Run 'make ut-coverage' and 'make smoke-coverage' first
+coverage: ut-coverage smoke-coverage
+	@echo "==> Generating combined coverage report (MARKDOWN + JSON)..."
+	grcov $(LLVM_PROFILE_FILE_DIR)/*.profraw -t markdown $(GRCOV_ARGS) --output-path coverage/coverage.md
+	grcov $(LLVM_PROFILE_FILE_DIR)/*.profraw -t coveralls+ $(GRCOV_ARGS) --output-path coverage/coverage.json
+	@echo "==> Coverage reports generated at coverage/coverage.md and coverage/coverage.json"
 
 contrib-build: nydusify nydus-overlayfs
 

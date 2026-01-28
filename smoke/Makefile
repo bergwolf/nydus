@@ -53,3 +53,12 @@ test-compatibility: build
 # NEW_NYDUSD_BINARY_PATH=target/release/nydusd
 test-takeover: build
 	TAKEOVER_TEST=true sudo -E ./smoke.test -test.v -test.timeout 10m -test.parallel=1 -test.run=TestTakeover
+
+coverage: build
+	@echo "==> Running smoke tests with coverage..."
+	NYDUS_NYDUSD_latest=$(COVERAGE_TARGET_DIR)/debug/nydusd \
+	NYDUS_BUILDER_latest=$(COVERAGE_TARGET_DIR)/debug/nydus-image \
+	LLVM_PROFILE_FILE=$(LLVM_PROFILE_FILE) \
+		sudo -E ./smoke.test -test.v -test.timeout 20m -test.parallel=4 -test.run=$(TESTS)
+	grcov $(dir $LLVM_PROFILE_FILE)/smoke-*.profraw -t markdown $(GRCOV_ARGS) --output-path $(dir $LLVM_PROFILE_FILE)/smoke-coverage.md
+	@echo "==> Smoke test coverage report generated at $(dir $LLVM_PROFILE_FILE)/smoke-coverage.md"
