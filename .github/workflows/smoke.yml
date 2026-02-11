@@ -189,9 +189,6 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
-    - name: Docker Cache
-      uses: jpribyl/action-docker-layer-caching@v0.1.0
-      continue-on-error: true
     - name: Download Nydus
       uses: actions/download-artifact@v7
       with:
@@ -217,6 +214,7 @@ jobs:
           sudo mkdir nydus-$version /usr/bin/nydus-$version
           sudo tar xzf nydus-static-$version_arch.tgz -C nydus-$version
           sudo cp -r nydus-$version/nydus-static/* /usr/bin/nydus-$version/
+          sudo rm -rf nydus-$version nydus-static-$version_arch.tgz
         done
     - name: Setup Golang
       uses: actions/setup-go@v5
@@ -260,7 +258,10 @@ jobs:
         done
 
         curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sudo sh -s -- -b /usr/bin v2.1.6
+        df -h .
         sudo -E ENABLE_DEBUG=1 make smoke-only
+        du -sh coverage
+        df -h .
         sudo -E "PATH=$PATH" make generate-codecov-markdown
         grep Total coverage/coverage.md
         sudo -E "PATH=$PATH" make generate-codecov
