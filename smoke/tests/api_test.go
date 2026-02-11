@@ -151,7 +151,8 @@ func (a *APIV1TestSuite) TestPrefetch(t *testing.T) {
 	rootFs := texture.MakeLowerLayer(
 		t,
 		filepath.Join(ctx.Env.WorkDir, "root-fs"),
-		texture.LargerFileMaker("large-blob.bin", 5))
+		texture.LargerFileMaker("large-blob.bin", 1))
+	defer os.Remove(filepath.Join(ctx.Env.WorkDir, "root-fs", "large-blob.bin"))
 
 	rafs := a.buildLayer(t, ctx, rootFs)
 
