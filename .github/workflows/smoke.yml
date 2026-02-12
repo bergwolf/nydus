@@ -259,12 +259,30 @@ jobs:
           export NYDUS_NYDUSIFY_$version_export=/usr/bin/nydus-$version/nydusify
         done
 
+        echo "=== Disk space before smoke tests ==="
+        df -h
+
         curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sudo sh -s -- -b /usr/bin v2.1.6
         sudo -E ENABLE_DEBUG=1 make smoke-only
+
+        echo "=== Disk space after smoke tests ==="
+        df -h
+        echo "=== Coverage directory contents ==="
+        du -sh coverage/ 2>/dev/null || echo "No coverage directory"
+        ls -lh coverage/ 2>/dev/null | head -20 || true
+
         sudo -E "PATH=$PATH" make generate-codecov-markdown
         grep Total coverage/coverage.md
         sudo -E "PATH=$PATH" make generate-codecov
         sudo cp coverage/coverage.info smoke-coverage.info
+    - name: Cleanup Coverage Files
+      run: |
+        echo "=== Final coverage cleanup ==="
+        if [ -x misc/cleanup-profraw.sh ]; then
+          sudo bash misc/cleanup-profraw.sh coverage || true
+        fi
+        echo "=== Final disk space ==="
+        df -h
     - name: Upload Nydus Smoke Coverage
       uses: actions/upload-artifact@v6
       with:
@@ -288,11 +306,23 @@ jobs:
       run: sudo bash misc/fscache/setup.sh
     - name: Unit Test
       run: |
+        echo "=== Disk space before unit tests ==="
+        df -h
         sudo -E ENABLE_DEBUG=1 "PATH=$PATH" make ut-nextest
+        echo "=== Disk space after unit tests ==="
+        df -h
+        du -sh coverage/ 2>/dev/null || echo "No coverage directory"
         sudo -E "PATH=$PATH" make generate-codecov-markdown
         grep Total coverage/coverage.md
         sudo -E "PATH=$PATH" make generate-codecov
         sudo cp coverage/coverage.info ut-coverage.info
+    - name: Cleanup Coverage Files
+      run: |
+        echo "=== Final coverage cleanup ==="
+        if [ -x misc/cleanup-profraw.sh ]; then
+          sudo bash misc/cleanup-profraw.sh coverage || true
+        fi
+        df -h
     - name: Upload Nydus UT Coverage
       uses: actions/upload-artifact@v6
       with:
@@ -378,13 +408,25 @@ jobs:
         sudo INSTALL_TARGET_TYPE=debug bash misc/prepare.sh takeover_test
     - name: Takeover Test
       run: |
+        echo "=== Disk space before takeover tests ==="
+        df -h
         export NEW_NYDUSD_BINARY_PATH=target/debug/nydusd
         sudo chmod +x target/debug/nydus-image
         sudo -E ENABLE_DEBUG=1 make smoke-takeover
+        echo "=== Disk space after takeover tests ==="
+        df -h
+        du -sh coverage/ 2>/dev/null || echo "No coverage directory"
         sudo -E "PATH=$PATH" make generate-codecov-markdown
         grep Total coverage/coverage.md
         sudo -E "PATH=$PATH" make generate-codecov
         sudo cp coverage/coverage.info takeover-coverage.info
+    - name: Cleanup Coverage Files
+      run: |
+        echo "=== Final coverage cleanup ==="
+        if [ -x misc/cleanup-profraw.sh ]; then
+          sudo bash misc/cleanup-profraw.sh coverage || true
+        fi
+        df -h
     - name: Upload Nydus Takeover
       uses: actions/upload-artifact@v6
       with:

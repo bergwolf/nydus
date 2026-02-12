@@ -151,10 +151,30 @@ smoke-takeover:
 smoke: release smoke-only
 
 generate-codecov-markdown: prepare-codecov
-	grcov $(dir ${LLVM_PROFILE_FILE})/*.profraw -t markdown $(GRCOV_ARGS) --output-path coverage/coverage.md
+	@echo "Merging any remaining profraw files..."
+	@if [ -x misc/cleanup-profraw.sh ]; then \
+		bash misc/cleanup-profraw.sh coverage || true; \
+	fi
+	@echo "Generating coverage markdown report..."
+	@if [ -f "$(dir ${LLVM_PROFILE_FILE})/merged.profdata" ]; then \
+		grcov $(dir ${LLVM_PROFILE_FILE})/merged.profdata $(dir ${LLVM_PROFILE_FILE})/*.profraw -t markdown $(GRCOV_ARGS) --output-path coverage/coverage.md 2>/dev/null || \
+		grcov $(dir ${LLVM_PROFILE_FILE})/merged.profdata -t markdown $(GRCOV_ARGS) --output-path coverage/coverage.md; \
+	else \
+		grcov $(dir ${LLVM_PROFILE_FILE})/*.profraw -t markdown $(GRCOV_ARGS) --output-path coverage/coverage.md; \
+	fi
 
 generate-codecov: prepare-codecov
-	grcov $(dir ${LLVM_PROFILE_FILE})/*.profraw -t lcov $(GRCOV_ARGS) --output-path coverage/coverage.info
+	@echo "Merging any remaining profraw files..."
+	@if [ -x misc/cleanup-profraw.sh ]; then \
+		bash misc/cleanup-profraw.sh coverage || true; \
+	fi
+	@echo "Generating coverage lcov report..."
+	@if [ -f "$(dir ${LLVM_PROFILE_FILE})/merged.profdata" ]; then \
+		grcov $(dir ${LLVM_PROFILE_FILE})/merged.profdata $(dir ${LLVM_PROFILE_FILE})/*.profraw -t lcov $(GRCOV_ARGS) --output-path coverage/coverage.info 2>/dev/null || \
+		grcov $(dir ${LLVM_PROFILE_FILE})/merged.profdata -t lcov $(GRCOV_ARGS) --output-path coverage/coverage.info; \
+	else \
+		grcov $(dir ${LLVM_PROFILE_FILE})/*.profraw -t lcov $(GRCOV_ARGS) --output-path coverage/coverage.info; \
+	fi
 
 
 contrib-build: nydusify nydus-overlayfs
