@@ -1095,4 +1095,143 @@ mod tests {
         rafs.statfs(&Context::default(), Inode::default()).unwrap();
         rafs.destroy();
     }
+
+    #[test]
+    fn test_rafs_with_xattr_enabled() {
+        let rafs = Rafs {
+            id: "xattr_test".into(),
+            device: BlobDevice::default(),
+            ios: FsIoStats::default().into(),
+            sb: Arc::new(RafsSuper::default()),
+            initialized: false,
+            digest_validate: false,
+            fs_prefetch: false,
+            prefetch_all: false,
+            xattr_enabled: true,
+            user_io_batch_size: 0,
+            prefetch_batch_size: 0,
+            i_uid: 0,
+            i_gid: 0,
+            i_time: 0,
+        };
+        assert!(rafs.xattr_supported());
+        assert_eq!(rafs.id(), "xattr_test");
+    }
+
+    #[test]
+    fn test_rafs_metadata() {
+        let rafs = Rafs {
+            id: "meta_test".into(),
+            device: BlobDevice::default(),
+            ios: FsIoStats::default().into(),
+            sb: Arc::new(RafsSuper::default()),
+            initialized: false,
+            digest_validate: false,
+            fs_prefetch: false,
+            prefetch_all: false,
+            xattr_enabled: false,
+            user_io_batch_size: 0,
+            prefetch_batch_size: 0,
+            i_uid: 0,
+            i_gid: 0,
+            i_time: 0,
+        };
+        let meta = rafs.metadata();
+        // Verify metadata() returns a valid reference to RafsSuperMeta
+        assert!(!meta.has_xattr());
+    }
+
+    #[test]
+    fn test_rafs_negative_entry_timeout() {
+        let rafs = Rafs {
+            id: "neg_entry".into(),
+            device: BlobDevice::default(),
+            ios: FsIoStats::default().into(),
+            sb: Arc::new(RafsSuper::default()),
+            initialized: false,
+            digest_validate: false,
+            fs_prefetch: false,
+            prefetch_all: false,
+            xattr_enabled: false,
+            user_io_batch_size: 0,
+            prefetch_batch_size: 0,
+            i_uid: 0,
+            i_gid: 0,
+            i_time: 0,
+        };
+        let ent = rafs.negative_entry();
+        assert_eq!(ent.inode, 0);
+        assert_eq!(ent.generation, 0);
+        assert_eq!(ent.attr_flags, 0);
+        // entry_timeout should be set to Duration::from_secs(1) as RAFS_DEFAULT_ATTR_TIMEOUT
+        assert!(ent.entry_timeout != Duration::from_secs(0));
+    }
+
+    #[test]
+    fn test_rafs_statfs_values() {
+        let rafs = Rafs {
+            id: "statfs_test".into(),
+            device: BlobDevice::default(),
+            ios: FsIoStats::default().into(),
+            sb: Arc::new(RafsSuper::default()),
+            initialized: false,
+            digest_validate: false,
+            fs_prefetch: false,
+            prefetch_all: false,
+            xattr_enabled: false,
+            user_io_batch_size: 0,
+            prefetch_batch_size: 0,
+            i_uid: 0,
+            i_gid: 0,
+            i_time: 0,
+        };
+        let st = rafs.statfs(&Context::default(), Inode::default()).unwrap();
+        assert_eq!(st.f_namemax, 255);
+    }
+
+    #[test]
+    fn test_rafs_destroy_idempotent() {
+        let rafs = Rafs {
+            id: "destroy_test".into(),
+            device: BlobDevice::default(),
+            ios: FsIoStats::default().into(),
+            sb: Arc::new(RafsSuper::default()),
+            initialized: false,
+            digest_validate: false,
+            fs_prefetch: false,
+            prefetch_all: false,
+            xattr_enabled: false,
+            user_io_batch_size: 0,
+            prefetch_batch_size: 0,
+            i_uid: 0,
+            i_gid: 0,
+            i_time: 0,
+        };
+        // Calling destroy multiple times should not panic
+        rafs.destroy();
+        rafs.destroy();
+    }
+
+    #[test]
+    fn test_rafs_with_custom_uid_gid() {
+        let rafs = Rafs {
+            id: "uid_gid_test".into(),
+            device: BlobDevice::default(),
+            ios: FsIoStats::default().into(),
+            sb: Arc::new(RafsSuper::default()),
+            initialized: false,
+            digest_validate: true,
+            fs_prefetch: true,
+            prefetch_all: true,
+            xattr_enabled: false,
+            user_io_batch_size: 1024,
+            prefetch_batch_size: 2048,
+            i_uid: 1000,
+            i_gid: 1000,
+            i_time: 12345,
+        };
+        assert_eq!(rafs.id(), "uid_gid_test");
+        // Verify statfs still works with custom values
+        rafs.statfs(&Context::default(), Inode::default()).unwrap();
+    }
 }

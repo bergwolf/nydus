@@ -2596,4 +2596,782 @@ mod tests {
         };
         assert!(BackendConfigV2::try_from(&config).is_err());
     }
+
+    #[test]
+    fn test_config_v2_default() {
+        let cfg = ConfigV2::default();
+        assert_eq!(cfg.version, 2);
+        assert_eq!(cfg.id, "");
+        assert!(cfg.backend.is_none());
+        assert!(cfg.cache.is_none());
+        assert!(cfg.rafs.is_none());
+        assert!(cfg.overlay.is_none());
+        assert!(cfg.external_backends.is_empty());
+    }
+
+    #[test]
+    fn test_config_v2_new() {
+        let cfg = ConfigV2::new("my_id");
+        assert_eq!(cfg.version, 2);
+        assert_eq!(cfg.id, "my_id");
+    }
+
+    #[test]
+    fn test_config_v2_validate_default() {
+        let cfg = ConfigV2::default();
+        assert!(cfg.validate());
+    }
+
+    #[test]
+    fn test_config_v2_validate_wrong_version() {
+        let mut cfg = ConfigV2::default();
+        cfg.version = 1;
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_config_v2_get_backend_config_none() {
+        let cfg = ConfigV2::default();
+        assert!(cfg.get_backend_config().is_err());
+    }
+
+    #[test]
+    fn test_config_v2_get_cache_config_none() {
+        let cfg = ConfigV2::default();
+        assert!(cfg.get_cache_config().is_err());
+    }
+
+    #[test]
+    fn test_config_v2_get_rafs_config_none() {
+        let cfg = ConfigV2::default();
+        assert!(cfg.get_rafs_config().is_err());
+    }
+
+    #[test]
+    fn test_config_v2_get_backend_config_some() {
+        let mut cfg = ConfigV2::default();
+        cfg.backend = Some(BackendConfigV2 {
+            backend_type: "localfs".to_string(),
+            localfs: Some(LocalFsConfig {
+                dir: "/tmp".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let backend = cfg.get_backend_config().unwrap();
+        assert_eq!(backend.backend_type, "localfs");
+    }
+
+    #[test]
+    fn test_config_v2_get_cache_config_some() {
+        let mut cfg = ConfigV2::default();
+        cfg.cache = Some(CacheConfigV2 {
+            cache_type: "dummycache".to_string(),
+            ..Default::default()
+        });
+        let cache = cfg.get_cache_config().unwrap();
+        assert_eq!(cache.cache_type, "dummycache");
+    }
+
+    #[test]
+    fn test_config_v2_is_chunk_validation_enabled() {
+        let cfg = ConfigV2::default();
+        assert!(!cfg.is_chunk_validation_enabled());
+
+        let mut cfg = ConfigV2::default();
+        cfg.cache = Some(CacheConfigV2 {
+            cache_type: "dummycache".to_string(),
+            cache_validate: true,
+            ..Default::default()
+        });
+        assert!(cfg.is_chunk_validation_enabled());
+
+        let mut cfg = ConfigV2::default();
+        cfg.rafs = Some(RafsConfigV2 {
+            mode: "direct".to_string(),
+            validate: true,
+            ..Default::default()
+        });
+        assert!(cfg.is_chunk_validation_enabled());
+    }
+
+    #[test]
+    fn test_config_v2_is_fs_cache() {
+        let cfg = ConfigV2::default();
+        assert!(!cfg.is_fs_cache());
+
+        let mut cfg = ConfigV2::default();
+        cfg.cache = Some(CacheConfigV2 {
+            cache_type: "fscache".to_string(),
+            fs_cache: Some(FsCacheConfig {
+                work_dir: "/tmp/test_fscache".to_string(),
+            }),
+            ..Default::default()
+        });
+        assert!(cfg.is_fs_cache());
+
+        let mut cfg = ConfigV2::default();
+        cfg.cache = Some(CacheConfigV2 {
+            cache_type: "blobcache".to_string(),
+            ..Default::default()
+        });
+        assert!(!cfg.is_fs_cache());
+    }
+
+    #[test]
+    fn test_config_v2_clone_without_secrets() {
+        let mut cfg = ConfigV2::default();
+        cfg.backend = Some(BackendConfigV2 {
+            backend_type: "oss".to_string(),
+            oss: Some(OssConfig {
+                endpoint: "http://example.com".to_string(),
+                bucket_name: "bucket".to_string(),
+                access_key_id: "secret_key_id".to_string(),
+                access_key_secret: "secret_value".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let clean = cfg.clone_without_secrets();
+        let oss = clean.backend.as_ref().unwrap().oss.as_ref().unwrap();
+        assert_eq!(oss.access_key_id, "");
+        assert_eq!(oss.access_key_secret, "");
+        assert_eq!(oss.endpoint, "http://example.com");
+    }
+
+    #[test]
+    fn test_config_v2_clone_without_secrets_registry() {
+        let mut cfg = ConfigV2::default();
+        cfg.backend = Some(BackendConfigV2 {
+            backend_type: "registry".to_string(),
+            registry: Some(RegistryConfig {
+                host: "ghcr.io".to_string(),
+                repo: "test/repo".to_string(),
+                auth: Some("token123".to_string()),
+                registry_token: Some("bearer_token".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let clean = cfg.clone_without_secrets();
+        let reg = clean.backend.as_ref().unwrap().registry.as_ref().unwrap();
+        assert!(reg.auth.is_none());
+        assert!(reg.registry_token.is_none());
+        assert_eq!(reg.host, "ghcr.io");
+    }
+
+    #[test]
+    fn test_config_v2_serialization_roundtrip() {
+        let mut cfg = ConfigV2::default();
+        cfg.cache = Some(CacheConfigV2 {
+            cache_type: "dummycache".to_string(),
+            ..Default::default()
+        });
+
+        let json = serde_json::to_string(&cfg).unwrap();
+        let parsed: ConfigV2 = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.version, 2);
+        assert_eq!(
+            parsed.cache.as_ref().unwrap().cache_type,
+            "dummycache"
+        );
+    }
+
+    #[test]
+    fn test_config_v2_from_str_json() {
+        let json = r#"{
+            "version": 2,
+            "backend": {
+                "type": "localfs",
+                "localfs": {
+                    "dir": "/tmp/blobs"
+                }
+            },
+            "cache": {
+                "type": "dummycache"
+            },
+            "rafs": {
+                "mode": "direct"
+            }
+        }"#;
+        let cfg: ConfigV2 = json.parse().unwrap();
+        assert_eq!(cfg.version, 2);
+        assert_eq!(
+            cfg.backend.as_ref().unwrap().backend_type,
+            "localfs"
+        );
+    }
+
+    #[test]
+    fn test_config_v2_from_str_invalid() {
+        let invalid = "not a valid config";
+        let result: std::result::Result<ConfigV2, _> = invalid.parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cache_config_v2_is_filecache() {
+        let cache = CacheConfigV2 {
+            cache_type: "blobcache".to_string(),
+            ..Default::default()
+        };
+        assert!(cache.is_filecache());
+
+        let cache = CacheConfigV2 {
+            cache_type: "filecache".to_string(),
+            ..Default::default()
+        };
+        assert!(cache.is_filecache());
+
+        let cache = CacheConfigV2 {
+            cache_type: "fscache".to_string(),
+            ..Default::default()
+        };
+        assert!(!cache.is_filecache());
+
+        let cache = CacheConfigV2 {
+            cache_type: "dummycache".to_string(),
+            ..Default::default()
+        };
+        assert!(!cache.is_filecache());
+    }
+
+    #[test]
+    fn test_cache_config_v2_is_fscache() {
+        let cache = CacheConfigV2 {
+            cache_type: "fscache".to_string(),
+            ..Default::default()
+        };
+        assert!(cache.is_fscache());
+
+        let cache = CacheConfigV2 {
+            cache_type: "blobcache".to_string(),
+            ..Default::default()
+        };
+        assert!(!cache.is_fscache());
+    }
+
+    #[test]
+    fn test_cache_config_v2_validate_dummycache() {
+        let cache = CacheConfigV2 {
+            cache_type: "dummycache".to_string(),
+            ..Default::default()
+        };
+        assert!(cache.validate());
+    }
+
+    #[test]
+    fn test_cache_config_v2_validate_empty() {
+        let cache = CacheConfigV2 {
+            cache_type: "".to_string(),
+            ..Default::default()
+        };
+        assert!(cache.validate());
+    }
+
+    #[test]
+    fn test_cache_config_v2_validate_unknown() {
+        let cache = CacheConfigV2 {
+            cache_type: "unknown_type".to_string(),
+            ..Default::default()
+        };
+        assert!(!cache.validate());
+    }
+
+    #[test]
+    fn test_cache_config_v2_validate_filecache_empty_dir() {
+        let cache = CacheConfigV2 {
+            cache_type: "blobcache".to_string(),
+            file_cache: Some(FileCacheConfig {
+                work_dir: "".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(!cache.validate());
+    }
+
+    #[test]
+    fn test_cache_config_v2_validate_filecache_no_config() {
+        let cache = CacheConfigV2 {
+            cache_type: "blobcache".to_string(),
+            file_cache: None,
+            ..Default::default()
+        };
+        assert!(!cache.validate());
+    }
+
+    #[test]
+    fn test_cache_config_v2_validate_fscache_empty_dir() {
+        let cache = CacheConfigV2 {
+            cache_type: "fscache".to_string(),
+            fs_cache: Some(FsCacheConfig {
+                work_dir: "".to_string(),
+            }),
+            ..Default::default()
+        };
+        assert!(!cache.validate());
+    }
+
+    #[test]
+    fn test_cache_config_v2_validate_fscache_no_config() {
+        let cache = CacheConfigV2 {
+            cache_type: "fscache".to_string(),
+            fs_cache: None,
+            ..Default::default()
+        };
+        assert!(!cache.validate());
+    }
+
+    #[test]
+    fn test_cache_config_v2_validate_prefetch_limits() {
+        let cache = CacheConfigV2 {
+            cache_type: "dummycache".to_string(),
+            prefetch: PrefetchConfigV2 {
+                enable: true,
+                batch_size: 0x10000001, // too large
+                threads_count: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!cache.validate());
+
+        let cache = CacheConfigV2 {
+            cache_type: "dummycache".to_string(),
+            prefetch: PrefetchConfigV2 {
+                enable: true,
+                batch_size: 1024,
+                threads_count: 0, // invalid: 0
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!cache.validate());
+
+        let cache = CacheConfigV2 {
+            cache_type: "dummycache".to_string(),
+            prefetch: PrefetchConfigV2 {
+                enable: true,
+                batch_size: 1024,
+                threads_count: 1025, // too many
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!cache.validate());
+    }
+
+    #[test]
+    fn test_cache_config_v2_get_filecache_config() {
+        let cache = CacheConfigV2 {
+            cache_type: "blobcache".to_string(),
+            file_cache: Some(FileCacheConfig {
+                work_dir: "/tmp/test".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let fc = cache.get_filecache_config().unwrap();
+        assert_eq!(fc.work_dir, "/tmp/test");
+
+        let cache = CacheConfigV2 {
+            cache_type: "fscache".to_string(),
+            ..Default::default()
+        };
+        assert!(cache.get_filecache_config().is_err());
+    }
+
+    #[test]
+    fn test_cache_config_v2_get_fscache_config() {
+        let cache = CacheConfigV2 {
+            cache_type: "fscache".to_string(),
+            fs_cache: Some(FsCacheConfig {
+                work_dir: "/tmp/fscache_test".to_string(),
+            }),
+            ..Default::default()
+        };
+        let fsc = cache.get_fscache_config().unwrap();
+        assert_eq!(fsc.work_dir, "/tmp/fscache_test");
+
+        let cache = CacheConfigV2 {
+            cache_type: "blobcache".to_string(),
+            ..Default::default()
+        };
+        assert!(cache.get_fscache_config().is_err());
+    }
+
+    #[test]
+    fn test_rafs_config_v2_validate_direct_mode() {
+        let cfg = RafsConfigV2 {
+            mode: "direct".to_string(),
+            ..Default::default()
+        };
+        assert!(cfg.validate());
+    }
+
+    #[test]
+    fn test_rafs_config_v2_validate_cached_mode() {
+        let cfg = RafsConfigV2 {
+            mode: "cached".to_string(),
+            ..Default::default()
+        };
+        assert!(cfg.validate());
+    }
+
+    #[test]
+    fn test_rafs_config_v2_validate_invalid_mode() {
+        let cfg = RafsConfigV2 {
+            mode: "invalid".to_string(),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_rafs_config_v2_validate_batch_size_too_large() {
+        let cfg = RafsConfigV2 {
+            mode: "direct".to_string(),
+            user_io_batch_size: 0x10000001,
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_rafs_config_v2_validate_prefetch_invalid() {
+        let cfg = RafsConfigV2 {
+            mode: "direct".to_string(),
+            prefetch: PrefetchConfigV2 {
+                enable: true,
+                batch_size: 0x10000001,
+                threads_count: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+
+        let cfg = RafsConfigV2 {
+            mode: "direct".to_string(),
+            prefetch: PrefetchConfigV2 {
+                enable: true,
+                batch_size: 1024,
+                threads_count: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+
+        let cfg = RafsConfigV2 {
+            mode: "direct".to_string(),
+            prefetch: PrefetchConfigV2 {
+                enable: true,
+                batch_size: 1024,
+                threads_count: 1025,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_rafs_config_v2_validate_prefetch_valid() {
+        let cfg = RafsConfigV2 {
+            mode: "direct".to_string(),
+            prefetch: PrefetchConfigV2 {
+                enable: true,
+                batch_size: 1024,
+                threads_count: 8,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(cfg.validate());
+    }
+
+    #[test]
+    fn test_rafs_config_v2_serialization() {
+        let cfg = RafsConfigV2 {
+            mode: "direct".to_string(),
+            user_io_batch_size: 2048,
+            validate: true,
+            enable_xattr: true,
+            iostats_files: false,
+            access_pattern: false,
+            latest_read_files: false,
+            prefetch: PrefetchConfigV2::default(),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let parsed: RafsConfigV2 = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.mode, "direct");
+        assert_eq!(parsed.user_io_batch_size, 2048);
+        assert!(parsed.validate);
+        assert!(parsed.enable_xattr);
+    }
+
+    #[test]
+    fn test_rafs_config_v2_deserialization_defaults() {
+        let json = r#"{"mode":"direct"}"#;
+        let cfg: RafsConfigV2 = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.mode, "direct");
+        assert!(!cfg.validate);
+        assert!(!cfg.enable_xattr);
+    }
+
+    #[test]
+    fn test_prefetch_config_v2_default() {
+        let cfg = PrefetchConfigV2::default();
+        assert!(!cfg.enable);
+        assert_eq!(cfg.threads_count, 0);
+        assert_eq!(cfg.batch_size, 0);
+        assert_eq!(cfg.bandwidth_limit, 0);
+        assert!(!cfg.prefetch_all);
+    }
+
+    #[test]
+    fn test_prefetch_config_v2_serde() {
+        let cfg = PrefetchConfigV2 {
+            enable: true,
+            threads_count: 4,
+            batch_size: 2048,
+            bandwidth_limit: 1000,
+            prefetch_all: true,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let parsed: PrefetchConfigV2 = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, cfg);
+    }
+
+    #[test]
+    fn test_proxy_config_default() {
+        let cfg = ProxyConfig::default();
+        assert_eq!(cfg.url, "");
+        assert_eq!(cfg.ping_url, "");
+        assert!(cfg.fallback);
+        assert_eq!(cfg.check_interval, 5);
+        assert!(!cfg.use_http);
+        assert_eq!(cfg.check_pause_elapsed, 300);
+    }
+
+    #[test]
+    fn test_config_v2_get_cache_working_directory_filecache() {
+        let mut cfg = ConfigV2::default();
+        cfg.cache = Some(CacheConfigV2 {
+            cache_type: "blobcache".to_string(),
+            file_cache: Some(FileCacheConfig {
+                work_dir: "/tmp/my_work_dir".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let dir = cfg.get_cache_working_directory().unwrap();
+        assert_eq!(dir, "/tmp/my_work_dir");
+    }
+
+    #[test]
+    fn test_config_v2_get_cache_working_directory_fscache() {
+        let mut cfg = ConfigV2::default();
+        cfg.cache = Some(CacheConfigV2 {
+            cache_type: "fscache".to_string(),
+            fs_cache: Some(FsCacheConfig {
+                work_dir: "/tmp/fscache_dir".to_string(),
+            }),
+            ..Default::default()
+        });
+        let dir = cfg.get_cache_working_directory().unwrap();
+        assert_eq!(dir, "/tmp/fscache_dir");
+    }
+
+    #[test]
+    fn test_config_v2_get_cache_working_directory_no_cache() {
+        let cfg = ConfigV2::default();
+        assert!(cfg.get_cache_working_directory().is_err());
+    }
+
+    #[test]
+    fn test_config_v2_get_cache_working_directory_no_workdir() {
+        let mut cfg = ConfigV2::default();
+        cfg.cache = Some(CacheConfigV2 {
+            cache_type: "dummycache".to_string(),
+            ..Default::default()
+        });
+        assert!(cfg.get_cache_working_directory().is_err());
+    }
+
+    #[test]
+    fn test_config_v2_update_registry_auth_info() {
+        let mut cfg = ConfigV2::default();
+        cfg.backend = Some(BackendConfigV2 {
+            backend_type: "registry".to_string(),
+            registry: Some(RegistryConfig {
+                host: "ghcr.io".to_string(),
+                repo: "test/repo".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        cfg.update_registry_auth_info(&Some("new_auth_token".to_string()));
+        let reg = cfg.backend.as_ref().unwrap().registry.as_ref().unwrap();
+        assert_eq!(reg.auth, Some("new_auth_token".to_string()));
+    }
+
+    #[test]
+    fn test_config_v2_update_registry_auth_info_none() {
+        let mut cfg = ConfigV2::default();
+        cfg.backend = Some(BackendConfigV2 {
+            backend_type: "registry".to_string(),
+            registry: Some(RegistryConfig {
+                host: "ghcr.io".to_string(),
+                repo: "test/repo".to_string(),
+                auth: Some("old_token".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        // Passing None should not change existing auth
+        cfg.update_registry_auth_info(&None);
+        let reg = cfg.backend.as_ref().unwrap().registry.as_ref().unwrap();
+        assert_eq!(reg.auth, Some("old_token".to_string()));
+    }
+
+    #[test]
+    fn test_config_v2_validate_with_invalid_backend() {
+        let mut cfg = ConfigV2::default();
+        cfg.backend = Some(BackendConfigV2 {
+            backend_type: "unknown_backend".to_string(),
+            ..Default::default()
+        });
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_config_v2_validate_with_invalid_cache() {
+        let mut cfg = ConfigV2::default();
+        cfg.cache = Some(CacheConfigV2 {
+            cache_type: "invalid_cache".to_string(),
+            ..Default::default()
+        });
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_config_v2_validate_with_invalid_rafs() {
+        let mut cfg = ConfigV2::default();
+        cfg.rafs = Some(RafsConfigV2 {
+            mode: "invalid_mode".to_string(),
+            ..Default::default()
+        });
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_backend_config_v2_validate_localfs_empty() {
+        let cfg = BackendConfigV2 {
+            backend_type: "localfs".to_string(),
+            localfs: Some(LocalFsConfig::default()),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_backend_config_v2_validate_localdisk_empty() {
+        let cfg = BackendConfigV2 {
+            backend_type: "localdisk".to_string(),
+            localdisk: Some(LocalDiskConfig::default()),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_backend_config_v2_validate_oss_empty() {
+        let cfg = BackendConfigV2 {
+            backend_type: "oss".to_string(),
+            oss: Some(OssConfig::default()),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_backend_config_v2_validate_s3_empty() {
+        let cfg = BackendConfigV2 {
+            backend_type: "s3".to_string(),
+            s3: Some(S3Config::default()),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_backend_config_v2_validate_registry_empty() {
+        let cfg = BackendConfigV2 {
+            backend_type: "registry".to_string(),
+            registry: Some(RegistryConfig::default()),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_backend_config_v2_validate_no_config() {
+        let cfg = BackendConfigV2 {
+            backend_type: "localdisk".to_string(),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+
+        let cfg = BackendConfigV2 {
+            backend_type: "localfs".to_string(),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+
+        let cfg = BackendConfigV2 {
+            backend_type: "oss".to_string(),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+
+        let cfg = BackendConfigV2 {
+            backend_type: "s3".to_string(),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+
+        let cfg = BackendConfigV2 {
+            backend_type: "registry".to_string(),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+
+        let cfg = BackendConfigV2 {
+            backend_type: "http-proxy".to_string(),
+            ..Default::default()
+        };
+        assert!(!cfg.validate());
+    }
+
+    #[test]
+    fn test_file_cache_config_default() {
+        let cfg = FileCacheConfig::default();
+        assert!(!cfg.disable_indexed_map);
+        assert!(!cfg.enable_encryption);
+        assert!(!cfg.enable_convergent_encryption);
+        assert_eq!(cfg.encryption_key, "");
+    }
+
+    #[test]
+    fn test_fs_cache_config_default() {
+        let cfg = FsCacheConfig::default();
+        assert_eq!(cfg.work_dir, "");
+    }
 }

@@ -2396,6 +2396,428 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_format_blob_features_individual() {
+        assert_eq!(format_blob_features(BlobFeatures::ALIGNED), "aligned");
+        assert_eq!(format_blob_features(BlobFeatures::BATCH), "batch");
+        assert_eq!(format_blob_features(BlobFeatures::CAP_TAR_TOC), "cap_toc");
+        assert_eq!(
+            format_blob_features(BlobFeatures::INLINED_CHUNK_DIGEST),
+            "chunk-digest"
+        );
+        assert_eq!(
+            format_blob_features(BlobFeatures::CHUNK_INFO_V2),
+            "chunk-v2"
+        );
+        assert_eq!(
+            format_blob_features(BlobFeatures::INLINED_FS_META),
+            "fs-meta"
+        );
+        assert_eq!(format_blob_features(BlobFeatures::SEPARATE), "separate");
+        assert_eq!(
+            format_blob_features(BlobFeatures::HAS_TAR_HEADER),
+            "tar-header"
+        );
+        assert_eq!(format_blob_features(BlobFeatures::HAS_TOC), "toc");
+        assert_eq!(format_blob_features(BlobFeatures::ZRAN), "zran");
+        assert_eq!(format_blob_features(BlobFeatures::ENCRYPTED), "encrypted");
+        assert_eq!(
+            format_blob_features(BlobFeatures::IS_CHUNKDICT_GENERATED),
+            "is-chunkdict-generated"
+        );
+        assert_eq!(format_blob_features(BlobFeatures::empty()), "");
+    }
+
+    #[test]
+    fn test_format_blob_features_combinations() {
+        let features = BlobFeatures::ALIGNED | BlobFeatures::ENCRYPTED;
+        let content = format_blob_features(features);
+        assert!(content.contains("aligned"));
+        assert!(content.contains("encrypted"));
+        assert!(!content.contains("batch"));
+    }
+
+    #[test]
+    fn test_blob_compression_context_header_feature_toggles() {
+        let mut header = BlobCompressionContextHeader::default();
+
+        // Test toggling features on and off
+        header.set_aligned(true);
+        assert!(header.is_4k_aligned());
+        assert!(header.has_feature(BlobFeatures::ALIGNED));
+        header.set_aligned(false);
+        assert!(!header.is_4k_aligned());
+        assert!(!header.has_feature(BlobFeatures::ALIGNED));
+
+        header.set_external(true);
+        assert!(header.has_feature(BlobFeatures::EXTERNAL));
+        header.set_external(false);
+        assert!(!header.has_feature(BlobFeatures::EXTERNAL));
+
+        header.set_is_chunkdict_generated(true);
+        assert!(header.has_feature(BlobFeatures::IS_CHUNKDICT_GENERATED));
+        header.set_is_chunkdict_generated(false);
+        assert!(!header.has_feature(BlobFeatures::IS_CHUNKDICT_GENERATED));
+
+        // Test accumulating multiple features
+        header.set_aligned(true);
+        header.set_encrypted(true);
+        header.set_ci_batch(true);
+        let features = header.features();
+        let bf = BlobFeatures::from_bits(features).unwrap();
+        assert!(bf.contains(BlobFeatures::ALIGNED));
+        assert!(bf.contains(BlobFeatures::ENCRYPTED));
+        assert!(bf.contains(BlobFeatures::BATCH));
+        assert!(!bf.contains(BlobFeatures::ZRAN));
+    }
+
+    #[test]
+    fn test_blob_compression_context_header_ci_compressor_none() {
+        let mut header = BlobCompressionContextHeader::default();
+        header.set_ci_compressor(compress::Algorithm::None);
+        assert_eq!(header.ci_compressor(), compress::Algorithm::None);
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_v1_accessors() {
+        use std::mem::ManuallyDrop;
+
+        let state = Arc::new(BlobCompressionContext {
+            blob_index: 3,
+            blob_features: 0,
+            compressed_size: 0x20000,
+            uncompressed_size: 0x40000,
+            chunk_info_array: ManuallyDrop::new(BlobMetaChunkArray::V1(vec![
+                BlobChunkInfoV1Ondisk {
+                    uncomp_info: u64::to_le(0x0100_0000_0000_0000),
+                    comp_info: u64::to_le(0x00ff_f000_0000_0000),
+                },
+                BlobChunkInfoV1Ondisk {
+                    uncomp_info: u64::to_le(0x01ff_f000_0000_2000),
+                    comp_info: u64::to_le(0x01ff_f000_0000_1000),
+                },
+            ])),
+            ..Default::default()
+        });
+
+        let chunk = BlobMetaChunk::new(0, &state);
+        assert_eq!(chunk.id(), 0);
+        assert_eq!(chunk.blob_index(), 3);
+        assert_eq!(chunk.compressed_offset(), 0);
+        assert_eq!(chunk.uncompressed_offset(), 0);
+        assert!(!chunk.is_batch());
+        assert!(!chunk.is_encrypted());
+        assert!(!chunk.has_crc32());
+        assert_eq!(chunk.crc32(), 0);
+
+        let chunk1 = BlobMetaChunk::new(1, &state);
+        assert_eq!(chunk1.id(), 1);
+        assert_eq!(chunk1.blob_index(), 3);
+        assert_eq!(chunk1.compressed_offset(), 0x1000);
+        assert_eq!(chunk1.uncompressed_offset(), 0x2000);
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_v2_accessors() {
+        use std::mem::ManuallyDrop;
+
+        let mut v2_chunk = BlobChunkInfoV2Ondisk::default();
+        v2_chunk.set_compressed_offset(0x5000);
+        v2_chunk.set_compressed_size(0x100);
+        v2_chunk.set_uncompressed_offset(0x8000);
+        v2_chunk.set_uncompressed_size(0x200);
+        v2_chunk.set_compressed(true);
+        v2_chunk.set_encrypted(true);
+
+        let state = Arc::new(BlobCompressionContext {
+            blob_index: 5,
+            blob_features: 0,
+            compressed_size: 0x100000,
+            uncompressed_size: 0x200000,
+            chunk_info_array: ManuallyDrop::new(BlobMetaChunkArray::V2(vec![v2_chunk])),
+            ..Default::default()
+        });
+
+        let chunk = BlobMetaChunk::new(0, &state);
+        assert_eq!(chunk.id(), 0);
+        assert_eq!(chunk.blob_index(), 5);
+        assert_eq!(chunk.compressed_offset(), 0x5000);
+        assert_eq!(chunk.compressed_size(), 0x100);
+        assert_eq!(chunk.uncompressed_offset(), 0x8000);
+        assert_eq!(chunk.uncompressed_size(), 0x200);
+        assert!(chunk.is_compressed());
+        assert!(chunk.is_encrypted());
+        assert!(!chunk.is_batch());
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_v5_trait() {
+        use crate::device::v5::BlobV5ChunkInfo;
+        use std::mem::ManuallyDrop;
+
+        let state = Arc::new(BlobCompressionContext {
+            blob_index: 1,
+            blob_features: 0,
+            compressed_size: 0x10000,
+            uncompressed_size: 0x10000,
+            chunk_info_array: ManuallyDrop::new(BlobMetaChunkArray::V1(vec![
+                BlobChunkInfoV1Ondisk {
+                    uncomp_info: u64::to_le(0x0100_0000_0000_0000),
+                    comp_info: u64::to_le(0x0100_0000_0000_0000),
+                },
+            ])),
+            ..Default::default()
+        });
+
+        let chunk = BlobMetaChunk::new(0, &state);
+        let v5 = chunk
+            .as_any()
+            .downcast_ref::<BlobMetaChunk>()
+            .unwrap();
+        assert_eq!(v5.index(), 0);
+        assert_eq!(v5.file_offset(), 0);
+        let flags = v5.flags();
+        assert!(!flags.contains(BlobChunkFlags::COMPRESSED));
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_compressed_flags() {
+        use crate::device::v5::BlobV5ChunkInfo;
+        use std::mem::ManuallyDrop;
+
+        // Create a compressed chunk (compressed_size != uncompressed_size for V1)
+        let state = Arc::new(BlobCompressionContext {
+            blob_index: 0,
+            blob_features: 0,
+            compressed_size: 0x100000,
+            uncompressed_size: 0x200000,
+            chunk_info_array: ManuallyDrop::new(BlobMetaChunkArray::V1(vec![
+                BlobChunkInfoV1Ondisk {
+                    uncomp_info: u64::to_le(0x01ff_f000_0000_0000),
+                    comp_info: u64::to_le(0x00ff_f000_0000_0000),
+                },
+            ])),
+            ..Default::default()
+        });
+
+        let chunk = BlobMetaChunk::new(0, &state);
+        assert!(chunk.is_compressed());
+        let v5 = chunk.as_any().downcast_ref::<BlobMetaChunk>().unwrap();
+        let flags = v5.flags();
+        assert!(flags.contains(BlobChunkFlags::COMPRESSED));
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_digest_default() {
+        use std::mem::ManuallyDrop;
+
+        let state = Arc::new(BlobCompressionContext {
+            blob_index: 0,
+            compressed_size: 0x10000,
+            uncompressed_size: 0x10000,
+            chunk_info_array: ManuallyDrop::new(BlobMetaChunkArray::V1(vec![
+                BlobChunkInfoV1Ondisk::default(),
+            ])),
+            ..Default::default()
+        });
+
+        // chunk_digest_array is empty, so should return default
+        let chunk = BlobMetaChunk::new(0, &state);
+        let digest = chunk.chunk_id();
+        assert_eq!(digest, &state.chunk_digest_default);
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_has_crc32_v2() {
+        use std::mem::ManuallyDrop;
+
+        let mut v2_chunk = BlobChunkInfoV2Ondisk::default();
+        v2_chunk.set_compressed_offset(0);
+        v2_chunk.set_compressed_size(0x100);
+        v2_chunk.set_uncompressed_offset(0);
+        v2_chunk.set_uncompressed_size(0x100);
+        v2_chunk.set_has_crc32(true);
+        v2_chunk.set_data(0x12345678);
+
+        let state = Arc::new(BlobCompressionContext {
+            blob_index: 0,
+            compressed_size: 0x10000,
+            uncompressed_size: 0x10000,
+            chunk_info_array: ManuallyDrop::new(BlobMetaChunkArray::V2(vec![v2_chunk])),
+            ..Default::default()
+        });
+
+        let chunk = BlobMetaChunk::new(0, &state);
+        assert!(chunk.has_crc32());
+        assert_eq!(chunk.crc32(), 0x12345678);
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_batch_v2() {
+        use std::mem::ManuallyDrop;
+
+        let mut v2_chunk = BlobChunkInfoV2Ondisk::default();
+        v2_chunk.set_compressed_offset(0x1000);
+        v2_chunk.set_compressed_size(0x200);
+        v2_chunk.set_uncompressed_offset(0x2000);
+        v2_chunk.set_uncompressed_size(0x400);
+        v2_chunk.set_batch(true);
+
+        let state = Arc::new(BlobCompressionContext {
+            blob_index: 0,
+            compressed_size: 0x100000,
+            uncompressed_size: 0x200000,
+            chunk_info_array: ManuallyDrop::new(BlobMetaChunkArray::V2(vec![v2_chunk])),
+            ..Default::default()
+        });
+
+        let chunk = BlobMetaChunk::new(0, &state);
+        assert!(chunk.is_batch());
+    }
+
+    #[test]
+    fn test_round_up_4k_additional() {
+        assert_eq!(round_up_4k(0x2000u32), 0x2000u32);
+        assert_eq!(round_up_4k(0x2001u32), 0x3000u32);
+        assert_eq!(round_up_4k(0x2fffu32), 0x3000u32);
+        assert_eq!(round_up_4k(0x3000u64), 0x3000u64);
+        assert_eq!(round_up_4k(0x3001u64), 0x4000u64);
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_info_trait_v1_is_encrypted() {
+        let chunk = BlobChunkInfoV1Ondisk::default();
+        assert!(!chunk.is_encrypted());
+        assert!(!chunk.has_crc32());
+        assert!(!chunk.is_zran());
+        assert!(!chunk.is_batch());
+        assert_eq!(chunk.crc32(), 0);
+        assert_eq!(chunk.get_data(), 0);
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_info_trait_v2_flags() {
+        let mut chunk = BlobChunkInfoV2Ondisk::default();
+        assert!(!chunk.is_encrypted());
+        assert!(!chunk.has_crc32());
+        assert!(!chunk.is_zran());
+        assert!(!chunk.is_batch());
+        assert!(!chunk.is_compressed());
+
+        chunk.set_encrypted(true);
+        assert!(chunk.is_encrypted());
+        chunk.set_encrypted(false);
+        assert!(!chunk.is_encrypted());
+
+        chunk.set_has_crc32(true);
+        assert!(chunk.has_crc32());
+        chunk.set_has_crc32(false);
+        assert!(!chunk.has_crc32());
+
+        chunk.set_compressed(true);
+        assert!(chunk.is_compressed());
+        chunk.set_compressed(false);
+        assert!(!chunk.is_compressed());
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_info_v2_zran_errors() {
+        let chunk = BlobChunkInfoV2Ondisk::default();
+        assert!(chunk.get_zran_index().is_err());
+        assert!(chunk.get_zran_offset().is_err());
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_info_v2_batch_errors() {
+        let chunk = BlobChunkInfoV2Ondisk::default();
+        assert!(chunk.get_batch_index().is_err());
+        assert!(chunk.get_uncompressed_offset_in_batch_buf().is_err());
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_info_v2_get_data() {
+        let mut chunk = BlobChunkInfoV2Ondisk::default();
+        chunk.set_data(0xdeadbeef);
+        assert_eq!(chunk.get_data(), 0xdeadbeef);
+        assert_eq!(chunk.crc32(), 0xdeadbeef_u64 as u32);
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_info_v2_display() {
+        let mut chunk = BlobChunkInfoV2Ondisk::default();
+        chunk.set_compressed_offset(0x100);
+        chunk.set_compressed_size(0x200);
+        chunk.set_uncompressed_offset(0x1000);
+        chunk.set_uncompressed_size(0x300);
+        let display = format!("{}", chunk);
+        assert!(display.contains("comp:100/200"));
+        assert!(display.contains("uncomp:1000/300"));
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_info_v1_validate_ok() {
+        let mut chunk = BlobChunkInfoV1Ondisk::default();
+        chunk.set_compressed_offset(0);
+        chunk.set_compressed_size(0x1000);
+        chunk.set_uncompressed_offset(0);
+        chunk.set_uncompressed_size(0x1000);
+
+        let state = BlobCompressionContext {
+            compressed_size: 0x2000,
+            uncompressed_size: 0x2000,
+            ..Default::default()
+        };
+        assert!(chunk.validate(&state).is_ok());
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_info_v1_validate_fail_compressed_end() {
+        let mut chunk = BlobChunkInfoV1Ondisk::default();
+        chunk.set_compressed_offset(0x1000);
+        chunk.set_compressed_size(0x2000);
+        chunk.set_uncompressed_offset(0);
+        chunk.set_uncompressed_size(0x1000);
+
+        let state = BlobCompressionContext {
+            compressed_size: 0x2000,
+            uncompressed_size: 0x2000,
+            ..Default::default()
+        };
+        assert!(chunk.validate(&state).is_err());
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_info_v2_validate_uncompressed_mismatch() {
+        let mut chunk = BlobChunkInfoV2Ondisk::default();
+        chunk.set_compressed_offset(0);
+        chunk.set_compressed_size(0x100);
+        chunk.set_uncompressed_offset(0);
+        chunk.set_uncompressed_size(0x200);
+        // Not compressed, not encrypted, so compressed_size must == uncompressed_size
+        let state = BlobCompressionContext {
+            compressed_size: 0x10000,
+            uncompressed_size: 0x10000,
+            ..Default::default()
+        };
+        assert!(chunk.validate(&state).is_err());
+    }
+
+    #[test]
+    fn test_blob_meta_chunk_info_v2_validate_encrypted_ok() {
+        let mut chunk = BlobChunkInfoV2Ondisk::default();
+        chunk.set_compressed_offset(0);
+        chunk.set_compressed_size(0x100);
+        chunk.set_uncompressed_offset(0);
+        chunk.set_uncompressed_size(0x200);
+        chunk.set_encrypted(true);
+        let state = BlobCompressionContext {
+            compressed_size: 0x10000,
+            uncompressed_size: 0x10000,
+            ..Default::default()
+        };
+        assert!(chunk.validate(&state).is_ok());
+    }
+
+    #[test]
     fn test_add_more_chunks() {
         // Batch chunks: [chunk0, chunk1], chunk2, [chunk3, chunk4]
         let mut chunk0 = BlobChunkInfoV2Ondisk::default();

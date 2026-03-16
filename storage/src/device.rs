@@ -1829,4 +1829,684 @@ mod tests {
             "be7d77eeb719f70884758d1aa800ed0fb09d701aaec469964e9d54325f0d5fef".to_owned()
         );
     }
+
+    #[test]
+    fn test_blob_info_setters_and_getters() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test_blob".to_string(),
+            1024,
+            512,
+            4096,
+            10,
+            BlobFeatures::empty(),
+        );
+
+        assert_eq!(blob_info.blob_index(), 0);
+        assert_eq!(blob_info.blob_id(), "test_blob");
+        assert_eq!(blob_info.raw_blob_id(), "test_blob");
+        assert_eq!(blob_info.uncompressed_size(), 1024);
+        assert_eq!(blob_info.compressed_size(), 512);
+        assert_eq!(blob_info.chunk_size(), 4096);
+        assert_eq!(blob_info.chunk_count(), 10);
+
+        blob_info.set_chunk_count(20);
+        assert_eq!(blob_info.chunk_count(), 20);
+
+        blob_info.set_compressed_size(2048);
+        assert_eq!(blob_info.compressed_size(), 2048);
+
+        blob_info.set_uncompressed_size(4096);
+        assert_eq!(blob_info.uncompressed_size(), 4096);
+
+        blob_info.set_blob_id("new_blob_id".to_string());
+        assert_eq!(blob_info.raw_blob_id(), "new_blob_id");
+    }
+
+    #[test]
+    fn test_blob_info_compressor_digester_cipher() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::empty(),
+        );
+
+        assert_eq!(blob_info.compressor(), compress::Algorithm::None);
+        blob_info.set_compressor(compress::Algorithm::Lz4Block);
+        assert_eq!(blob_info.compressor(), compress::Algorithm::Lz4Block);
+
+        assert_eq!(blob_info.digester(), digest::Algorithm::Blake3);
+        blob_info.set_digester(digest::Algorithm::Sha256);
+        assert_eq!(blob_info.digester(), digest::Algorithm::Sha256);
+
+        assert_eq!(blob_info.cipher(), crypt::Algorithm::None);
+        blob_info.set_cipher(crypt::Algorithm::Aes128Xts);
+        assert_eq!(blob_info.cipher(), crypt::Algorithm::Aes128Xts);
+    }
+
+    #[test]
+    fn test_blob_info_prefetch() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::empty(),
+        );
+
+        assert_eq!(blob_info.prefetch_offset(), 0);
+        assert_eq!(blob_info.prefetch_size(), 0);
+
+        blob_info.set_prefetch_info(100, 200);
+        assert_eq!(blob_info.prefetch_offset(), 100);
+        assert_eq!(blob_info.prefetch_size(), 200);
+    }
+
+    #[test]
+    fn test_blob_info_meta_ci() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::empty(),
+        );
+
+        assert!(!blob_info.meta_ci_is_valid());
+        assert_eq!(blob_info.meta_ci_offset(), 0);
+        assert_eq!(blob_info.meta_ci_compressed_size(), 0);
+        assert_eq!(blob_info.meta_ci_uncompressed_size(), 0);
+        assert_eq!(blob_info.meta_ci_compressor(), compress::Algorithm::None);
+
+        blob_info.set_blob_meta_info(
+            0x1000,
+            0x500,
+            0x800,
+            compress::Algorithm::Lz4Block as u32,
+        );
+        assert!(blob_info.meta_ci_is_valid());
+        assert_eq!(blob_info.meta_ci_offset(), 0x1000);
+        assert_eq!(blob_info.meta_ci_compressed_size(), 0x500);
+        assert_eq!(blob_info.meta_ci_uncompressed_size(), 0x800);
+        assert_eq!(blob_info.meta_ci_compressor(), compress::Algorithm::Lz4Block);
+    }
+
+    #[test]
+    fn test_blob_info_meta_ci_compressor_variants() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::empty(),
+        );
+
+        blob_info.set_blob_meta_info(0, 1, 1, compress::Algorithm::GZip as u32);
+        assert_eq!(blob_info.meta_ci_compressor(), compress::Algorithm::GZip);
+
+        blob_info.set_blob_meta_info(0, 1, 1, compress::Algorithm::Zstd as u32);
+        assert_eq!(blob_info.meta_ci_compressor(), compress::Algorithm::Zstd);
+
+        // Unknown compressor should fall back to None
+        blob_info.set_blob_meta_info(0, 1, 1, 999);
+        assert_eq!(blob_info.meta_ci_compressor(), compress::Algorithm::None);
+    }
+
+    #[test]
+    fn test_blob_info_set_meta_ci_individual() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::empty(),
+        );
+
+        blob_info.set_meta_ci_compressed_size(0x100);
+        assert_eq!(blob_info.meta_ci_compressed_size(), 0x100);
+
+        blob_info.set_meta_ci_uncompressed_size(0x200);
+        assert_eq!(blob_info.meta_ci_uncompressed_size(), 0x200);
+
+        blob_info.set_meta_ci_offset(0x300);
+        assert_eq!(blob_info.meta_ci_offset(), 0x300);
+    }
+
+    #[test]
+    fn test_blob_info_blob_toc_and_meta_digests() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::empty(),
+        );
+
+        assert_eq!(*blob_info.blob_toc_digest(), [0u8; 32]);
+        assert_eq!(blob_info.blob_toc_size(), 0);
+        assert_eq!(*blob_info.blob_meta_digest(), [0u8; 32]);
+        assert_eq!(blob_info.blob_meta_size(), 0);
+
+        let digest = [0xab; 32];
+        blob_info.set_blob_toc_digest(digest);
+        assert_eq!(*blob_info.blob_toc_digest(), [0xab; 32]);
+
+        blob_info.set_blob_toc_size(4096);
+        assert_eq!(blob_info.blob_toc_size(), 4096);
+
+        let meta_digest = [0xcd; 32];
+        blob_info.set_blob_meta_digest(meta_digest);
+        assert_eq!(*blob_info.blob_meta_digest(), [0xcd; 32]);
+
+        blob_info.set_blob_meta_size(8192);
+        assert_eq!(blob_info.blob_meta_size(), 8192);
+    }
+
+    #[test]
+    fn test_blob_info_chunkdict_generated() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::empty(),
+        );
+
+        assert!(!blob_info.is_chunkdict_generated());
+        blob_info.set_chunkdict_generated(true);
+        assert!(blob_info.is_chunkdict_generated());
+        blob_info.set_chunkdict_generated(false);
+        assert!(!blob_info.is_chunkdict_generated());
+    }
+
+    #[test]
+    fn test_blob_info_feature_checks() {
+        let blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::ALIGNED | BlobFeatures::CHUNK_INFO_V2,
+        );
+
+        assert!(blob_info.has_feature(BlobFeatures::ALIGNED));
+        assert!(blob_info.has_feature(BlobFeatures::CHUNK_INFO_V2));
+        assert!(!blob_info.has_feature(BlobFeatures::ZRAN));
+        assert!(!blob_info.is_external());
+
+        let features = blob_info.features();
+        assert!(features.contains(BlobFeatures::ALIGNED));
+    }
+
+    #[test]
+    fn test_blob_info_is_external() {
+        let blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::EXTERNAL,
+        );
+        assert!(blob_info.is_external());
+    }
+
+    #[test]
+    fn test_blob_info_legacy_stargz() {
+        // GZip compressor without CHUNK_INFO_V2 triggers is_legacy_stargz
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::empty(),
+        );
+        assert!(!blob_info.is_legacy_stargz());
+        blob_info.set_compressor(compress::Algorithm::GZip);
+        assert!(blob_info.is_legacy_stargz());
+    }
+
+    #[test]
+    fn test_blob_info_v5_no_ext_blob_table() {
+        // chunk_count=0 should set _V5_NO_EXT_BLOB_TABLE
+        let blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            0,
+            BlobFeatures::empty(),
+        );
+        assert!(blob_info.has_feature(BlobFeatures::_V5_NO_EXT_BLOB_TABLE));
+    }
+
+    #[test]
+    fn test_blob_info_separated_with_prefetch_files() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::empty(),
+        );
+
+        assert!(!blob_info.has_feature(BlobFeatures::IS_SEPARATED_WITH_PREFETCH_FILES));
+        blob_info.set_separated_with_prefetch_files_feature(true);
+        assert!(blob_info.has_feature(BlobFeatures::IS_SEPARATED_WITH_PREFETCH_FILES));
+        // Setting false should not change
+        blob_info.set_separated_with_prefetch_files_feature(false);
+        assert!(blob_info.has_feature(BlobFeatures::IS_SEPARATED_WITH_PREFETCH_FILES));
+    }
+
+    #[test]
+    fn test_blob_info_compressed_data_size_separate() {
+        let blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            5000,
+            0,
+            1,
+            BlobFeatures::SEPARATE | BlobFeatures::CAP_TAR_TOC,
+        );
+        assert_eq!(blob_info.compressed_data_size(), 5000);
+    }
+
+    #[test]
+    fn test_blob_info_compressed_data_size_cap_tar_toc_v5() {
+        let blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            5000,
+            0,
+            1,
+            BlobFeatures::CAP_TAR_TOC,
+        );
+        // meta_ci_is_valid() is false, so this is v5 path: compressed_size
+        assert_eq!(blob_info.compressed_data_size(), 5000);
+    }
+
+    #[test]
+    fn test_blob_info_compressed_data_size_cap_tar_toc_v5_tar_header() {
+        let blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            5000,
+            0,
+            1,
+            BlobFeatures::CAP_TAR_TOC | BlobFeatures::HAS_TAR_HEADER,
+        );
+        // v5 with tar header: compressed_size - 0x200
+        assert_eq!(blob_info.compressed_data_size(), 5000 - 0x200);
+    }
+
+    #[test]
+    fn test_blob_info_compressed_data_size_cap_tar_toc_v6() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            10000,
+            0,
+            1,
+            BlobFeatures::CAP_TAR_TOC,
+        );
+        blob_info.set_blob_meta_info(0x1000, 0x500, 0x800, 0);
+        assert_eq!(blob_info.compressed_data_size(), 0x1000);
+    }
+
+    #[test]
+    fn test_blob_info_compressed_data_size_cap_tar_toc_v6_tar_header() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            10000,
+            0,
+            1,
+            BlobFeatures::CAP_TAR_TOC | BlobFeatures::HAS_TAR_HEADER,
+        );
+        blob_info.set_blob_meta_info(0x1000, 0x500, 0x800, 0);
+        assert_eq!(blob_info.compressed_data_size(), 0x1000 - 0x200);
+    }
+
+    #[test]
+    fn test_blob_info_compressed_data_size_no_features() {
+        let blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            5000,
+            0,
+            1,
+            BlobFeatures::empty(),
+        );
+        assert_eq!(blob_info.compressed_data_size(), 5000);
+    }
+
+    #[test]
+    fn test_blob_info_cipher_info() {
+        let mut blob_info = BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::empty(),
+        );
+
+        let cipher_obj = Arc::new(Cipher::default());
+        blob_info.set_cipher_info(crypt::Algorithm::Aes128Xts, cipher_obj.clone(), None);
+
+        let (algo, obj, ctx) = blob_info.get_cipher_info();
+        assert_eq!(algo, crypt::Algorithm::Aes128Xts);
+        assert!(ctx.is_none());
+        assert!(Arc::ptr_eq(&obj, &cipher_obj));
+    }
+
+    #[test]
+    fn test_blob_info_get_blob_id_from_meta_path() {
+        let path = PathBuf::from("/tmp/abcdef1234.blob.meta");
+        let id = BlobInfo::get_blob_id_from_meta_path(&path).unwrap();
+        assert_eq!(id, "abcdef1234");
+
+        let path = PathBuf::from("/tmp/simple");
+        let id = BlobInfo::get_blob_id_from_meta_path(&path).unwrap();
+        assert_eq!(id, "simple");
+    }
+
+    #[test]
+    fn test_blob_chunk_flags_default() {
+        let flags = BlobChunkFlags::default();
+        assert_eq!(flags, BlobChunkFlags::empty());
+        assert!(!flags.contains(BlobChunkFlags::COMPRESSED));
+        assert!(!flags.contains(BlobChunkFlags::ENCRYPTED));
+        assert!(!flags.contains(BlobChunkFlags::BATCH));
+        assert!(!flags.contains(BlobChunkFlags::HAS_CRC32));
+    }
+
+    #[test]
+    fn test_blob_chunk_flags_combinations() {
+        let flags = BlobChunkFlags::COMPRESSED | BlobChunkFlags::ENCRYPTED;
+        assert!(flags.contains(BlobChunkFlags::COMPRESSED));
+        assert!(flags.contains(BlobChunkFlags::ENCRYPTED));
+        assert!(!flags.contains(BlobChunkFlags::BATCH));
+
+        let all = BlobChunkFlags::COMPRESSED
+            | BlobChunkFlags::ENCRYPTED
+            | BlobChunkFlags::BATCH
+            | BlobChunkFlags::HAS_CRC32;
+        assert!(all.contains(BlobChunkFlags::COMPRESSED));
+        assert!(all.contains(BlobChunkFlags::ENCRYPTED));
+        assert!(all.contains(BlobChunkFlags::BATCH));
+        assert!(all.contains(BlobChunkFlags::HAS_CRC32));
+    }
+
+    #[test]
+    fn test_blob_io_vec_operations() {
+        let blob = Arc::new(BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            4096,
+            1,
+            BlobFeatures::empty(),
+        ));
+
+        let mut io_vec = BlobIoVec::new(blob.clone());
+        assert!(io_vec.is_empty());
+        assert_eq!(io_vec.len(), 0);
+        assert_eq!(io_vec.size(), 0);
+        assert_eq!(io_vec.blob_index(), 0);
+        assert!(io_vec.blob_io_desc(0).is_none());
+
+        let chunk_info = MockChunkInfo::new();
+        let io_chunk = BlobIoChunk(Arc::new(chunk_info));
+        let desc = BlobIoDesc {
+            blob: blob.clone(),
+            chunkinfo: io_chunk,
+            offset: 0,
+            size: 100,
+            user_io: true,
+        };
+        io_vec.push(desc);
+
+        assert!(!io_vec.is_empty());
+        assert_eq!(io_vec.len(), 1);
+        assert_eq!(io_vec.size(), 100);
+        assert!(io_vec.blob_io_desc(0).is_some());
+        assert!(io_vec.blob_io_desc(1).is_none());
+        assert!(io_vec.is_target_blob(0));
+        assert!(!io_vec.is_target_blob(1));
+    }
+
+    #[test]
+    fn test_blob_io_vec_reset() {
+        let blob = Arc::new(BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            4096,
+            1,
+            BlobFeatures::empty(),
+        ));
+
+        let mut io_vec = BlobIoVec::new(blob.clone());
+        let chunk_info = MockChunkInfo::new();
+        let io_chunk = BlobIoChunk(Arc::new(chunk_info));
+        let desc = BlobIoDesc {
+            blob: blob.clone(),
+            chunkinfo: io_chunk,
+            offset: 0,
+            size: 100,
+            user_io: true,
+        };
+        io_vec.push(desc);
+        assert_eq!(io_vec.len(), 1);
+
+        io_vec.reset();
+        assert!(io_vec.is_empty());
+        assert_eq!(io_vec.len(), 0);
+        assert_eq!(io_vec.size(), 0);
+    }
+
+    #[test]
+    fn test_blob_io_vec_has_same_blob() {
+        let blob1 = Arc::new(BlobInfo::new(
+            0,
+            "blob1".to_string(),
+            0,
+            0,
+            4096,
+            1,
+            BlobFeatures::empty(),
+        ));
+        let blob2 = Arc::new(BlobInfo::new(
+            1,
+            "blob2".to_string(),
+            0,
+            0,
+            4096,
+            1,
+            BlobFeatures::empty(),
+        ));
+
+        let vec1 = BlobIoVec::new(blob1.clone());
+        let vec2 = BlobIoVec::new(blob1.clone());
+        let vec3 = BlobIoVec::new(blob2);
+
+        assert!(vec1.has_same_blob(&vec2));
+        assert!(!vec1.has_same_blob(&vec3));
+    }
+
+    #[test]
+    fn test_blob_io_vec_debug() {
+        let blob = Arc::new(BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            4096,
+            1,
+            BlobFeatures::empty(),
+        ));
+        let io_vec = BlobIoVec::new(blob);
+        let debug_str = format!("{:?}", io_vec);
+        assert!(debug_str.contains("BlobIoDesc"));
+        assert!(debug_str.contains("blob_index"));
+    }
+
+    #[test]
+    fn test_blob_io_merge() {
+        let blob = Arc::new(BlobInfo::new(
+            0,
+            "merge_test".to_string(),
+            0,
+            0,
+            4096,
+            1,
+            BlobFeatures::empty(),
+        ));
+
+        let mut merge = BlobIoMerge::default();
+
+        // Appending empty vec should be ignored
+        let empty_vec = BlobIoVec::new(blob.clone());
+        merge.append(empty_vec);
+        assert!(merge.get_current_element().is_none());
+
+        // Append a non-empty vec
+        let mut io_vec = BlobIoVec::new(blob.clone());
+        let chunk_info = MockChunkInfo::new();
+        let io_chunk = BlobIoChunk(Arc::new(chunk_info));
+        let desc = BlobIoDesc {
+            blob: blob.clone(),
+            chunkinfo: io_chunk,
+            offset: 0,
+            size: 50,
+            user_io: true,
+        };
+        io_vec.push(desc);
+        merge.append(io_vec);
+
+        assert!(merge.get_current_element().is_some());
+
+        let drained: Vec<_> = merge.drain().collect();
+        assert_eq!(drained.len(), 1);
+    }
+
+    #[test]
+    fn test_blob_io_chunk_delegation() {
+        let mut mock = MockChunkInfo::new();
+        mock.compress_offset = 0x1000;
+        mock.compress_size = 0x200;
+        mock.uncompress_offset = 0x2000;
+        mock.uncompress_size = 0x400;
+        mock.blob_index = 3;
+        mock.index = 7;
+        mock.flags = BlobChunkFlags::COMPRESSED;
+
+        let io_chunk = BlobIoChunk(Arc::new(mock));
+        assert_eq!(io_chunk.compressed_offset(), 0x1000);
+        assert_eq!(io_chunk.compressed_size(), 0x200);
+        assert_eq!(io_chunk.compressed_end(), 0x1200);
+        assert_eq!(io_chunk.uncompressed_offset(), 0x2000);
+        assert_eq!(io_chunk.uncompressed_size(), 0x400);
+        assert_eq!(io_chunk.uncompressed_end(), 0x2400);
+        assert_eq!(io_chunk.blob_index(), 3);
+        assert_eq!(io_chunk.id(), 7);
+        assert!(io_chunk.is_compressed());
+        assert!(!io_chunk.is_encrypted());
+        assert!(!io_chunk.is_batch());
+    }
+
+    #[test]
+    fn test_blob_io_desc_debug() {
+        let blob = Arc::new(BlobInfo::new(
+            0,
+            "test".to_string(),
+            0,
+            0,
+            4096,
+            1,
+            BlobFeatures::empty(),
+        ));
+        let chunk_info = MockChunkInfo::new();
+        let io_chunk = BlobIoChunk(Arc::new(chunk_info));
+        let desc = BlobIoDesc {
+            blob: blob.clone(),
+            chunkinfo: io_chunk,
+            offset: 10,
+            size: 20,
+            user_io: true,
+        };
+
+        let debug = format!("{:?}", desc);
+        assert!(debug.contains("10"));
+        assert!(debug.contains("20"));
+    }
+
+    #[test]
+    fn test_blob_features_is_tarfs_combinations() {
+        assert!(
+            !(BlobFeatures::CAP_TAR_TOC).is_tarfs(),
+            "CAP_TAR_TOC alone is not tarfs"
+        );
+        assert!(
+            !(BlobFeatures::TARFS).is_tarfs(),
+            "TARFS alone is not tarfs"
+        );
+        assert!((BlobFeatures::CAP_TAR_TOC | BlobFeatures::TARFS).is_tarfs());
+    }
+
+    #[test]
+    fn test_blob_device_default() {
+        let device = BlobDevice::default();
+        assert!(!device.has_device());
+    }
+
+    #[test]
+    fn test_blob_info_blob_id_with_inlined_meta() {
+        let blob_info = BlobInfo::new(
+            0,
+            "original_id".to_string(),
+            0,
+            0,
+            0,
+            1,
+            BlobFeatures::INLINED_FS_META | BlobFeatures::CAP_TAR_TOC,
+        );
+        // INLINED_FS_META + CAP_TAR_TOC without SEPARATE should still return original blob_id
+        // when meta_path is empty
+        assert_eq!(blob_info.blob_id(), "original_id");
+    }
 }

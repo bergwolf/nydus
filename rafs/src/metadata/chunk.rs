@@ -697,4 +697,294 @@ mod tests {
             "RafsV5ChunkInfo { block_id: RafsDigest { data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, blob_index: 0, flags: (empty), compressed_size: 0, uncompressed_size: 0, compressed_offset: 0, uncompressed_offset: 0, file_offset: 0, index: 0, crc32: 0 }"
         );
     }
+
+    #[test]
+    fn test_chunk_wrapper_v5_construction_defaults() {
+        let wrapper = ChunkWrapper::new(RafsVersion::V5);
+        assert_eq!(wrapper.blob_index(), 0);
+        assert_eq!(wrapper.compressed_offset(), 0);
+        assert_eq!(wrapper.compressed_size(), 0);
+        assert_eq!(wrapper.uncompressed_offset(), 0);
+        assert_eq!(wrapper.uncompressed_size(), 0);
+        assert_eq!(wrapper.index(), 0);
+        assert_eq!(wrapper.file_offset(), 0);
+        assert!(!wrapper.is_compressed());
+        assert!(!wrapper.is_encrypted());
+        assert!(!wrapper.is_batch());
+        assert!(!wrapper.has_crc32());
+        assert_eq!(wrapper.crc32(), 0);
+    }
+
+    #[test]
+    fn test_chunk_wrapper_v6_construction_defaults() {
+        let wrapper = ChunkWrapper::new(RafsVersion::V6);
+        assert_eq!(wrapper.blob_index(), 0);
+        assert_eq!(wrapper.compressed_offset(), 0);
+        assert_eq!(wrapper.compressed_size(), 0);
+        assert_eq!(wrapper.uncompressed_offset(), 0);
+        assert_eq!(wrapper.uncompressed_size(), 0);
+        assert_eq!(wrapper.index(), 0);
+        assert_eq!(wrapper.file_offset(), 0);
+        assert!(!wrapper.is_compressed());
+        assert!(!wrapper.is_encrypted());
+        assert!(!wrapper.is_batch());
+    }
+
+    #[test]
+    fn test_chunk_wrapper_set_encrypted_v6() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V6);
+        assert!(!wrapper.is_encrypted());
+        wrapper.set_encrypted(true);
+        assert!(wrapper.is_encrypted());
+        wrapper.set_encrypted(false);
+        assert!(!wrapper.is_encrypted());
+    }
+
+    #[test]
+    fn test_chunk_wrapper_set_encrypted_v5() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V5);
+        assert!(!wrapper.is_encrypted());
+        wrapper.set_encrypted(true);
+        assert!(wrapper.is_encrypted());
+        wrapper.set_encrypted(false);
+        assert!(!wrapper.is_encrypted());
+    }
+
+    #[test]
+    fn test_chunk_wrapper_crc32_v5() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V5);
+        assert_eq!(wrapper.crc32(), 0);
+        assert!(!wrapper.has_crc32());
+
+        wrapper.set_crc32(0x12345678);
+        assert_eq!(wrapper.crc32(), 0x12345678);
+
+        wrapper.set_has_crc32(true);
+        assert!(wrapper.has_crc32());
+        wrapper.set_has_crc32(false);
+        assert!(!wrapper.has_crc32());
+    }
+
+    #[test]
+    fn test_chunk_wrapper_crc32_v6() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V6);
+        wrapper.set_crc32(0xdeadbeef);
+        assert_eq!(wrapper.crc32(), 0xdeadbeef);
+
+        wrapper.set_has_crc32(true);
+        assert!(wrapper.has_crc32());
+    }
+
+    #[test]
+    fn test_chunk_wrapper_set_chunk_info_v5() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V5);
+        wrapper
+            .set_chunk_info(
+                1,    // blob_index
+                2,    // chunk_index
+                100,  // file_offset
+                200,  // uncompressed_offset
+                300,  // uncompressed_size
+                400,  // compressed_offset
+                500,  // compressed_size
+                true, // is_compressed
+                true, // is_encrypted (ignored for V5)
+                true, // has_crc32
+            )
+            .unwrap();
+
+        assert_eq!(wrapper.blob_index(), 1);
+        assert_eq!(wrapper.index(), 2);
+        assert_eq!(wrapper.file_offset(), 100);
+        assert_eq!(wrapper.uncompressed_offset(), 200);
+        assert_eq!(wrapper.uncompressed_size(), 300);
+        assert_eq!(wrapper.compressed_offset(), 400);
+        assert_eq!(wrapper.compressed_size(), 500);
+        assert!(wrapper.is_compressed());
+        assert!(wrapper.has_crc32());
+        // V5 does not set encrypted flag in set_chunk_info
+        assert!(!wrapper.is_encrypted());
+    }
+
+    #[test]
+    fn test_chunk_wrapper_set_chunk_info_v6() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V6);
+        wrapper
+            .set_chunk_info(
+                3,     // blob_index
+                4,     // chunk_index
+                1000,  // file_offset
+                2000,  // uncompressed_offset
+                3000,  // uncompressed_size
+                4000,  // compressed_offset
+                5000,  // compressed_size
+                true,  // is_compressed
+                true,  // is_encrypted
+                true,  // has_crc32
+            )
+            .unwrap();
+
+        assert_eq!(wrapper.blob_index(), 3);
+        assert_eq!(wrapper.index(), 4);
+        assert_eq!(wrapper.file_offset(), 1000);
+        assert_eq!(wrapper.uncompressed_offset(), 2000);
+        assert_eq!(wrapper.uncompressed_size(), 3000);
+        assert_eq!(wrapper.compressed_offset(), 4000);
+        assert_eq!(wrapper.compressed_size(), 5000);
+        assert!(wrapper.is_compressed());
+        assert!(wrapper.is_encrypted());
+        assert!(wrapper.has_crc32());
+    }
+
+    #[test]
+    fn test_chunk_wrapper_set_chunk_info_no_flags() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V6);
+        wrapper
+            .set_chunk_info(0, 0, 0, 0, 100, 0, 100, false, false, false)
+            .unwrap();
+        assert!(!wrapper.is_compressed());
+        assert!(!wrapper.is_encrypted());
+        assert!(!wrapper.has_crc32());
+    }
+
+    #[test]
+    fn test_chunk_wrapper_copy_from_v5_to_v6() {
+        let mut v5 = ChunkWrapper::new(RafsVersion::V5);
+        v5.set_blob_index(10);
+        v5.set_compressed_offset(0x1000);
+        v5.set_compressed_size(0x200);
+        v5.set_uncompressed_offset(0x2000);
+        v5.set_uncompressed_size(0x400);
+        v5.set_index(5);
+        v5.set_file_offset(0x5000);
+
+        let mut v6 = ChunkWrapper::new(RafsVersion::V6);
+        v6.copy_from(&v5);
+        assert_eq!(v6.blob_index(), 10);
+        assert_eq!(v6.compressed_offset(), 0x1000);
+        assert_eq!(v6.compressed_size(), 0x200);
+        assert_eq!(v6.uncompressed_offset(), 0x2000);
+        assert_eq!(v6.uncompressed_size(), 0x400);
+        assert_eq!(v6.index(), 5);
+        assert_eq!(v6.file_offset(), 0x5000);
+    }
+
+    #[test]
+    fn test_chunk_wrapper_copy_from_v6_to_v5() {
+        let mut v6 = ChunkWrapper::new(RafsVersion::V6);
+        v6.set_blob_index(20);
+        v6.set_compressed_offset(0x3000);
+        v6.set_compressed_size(0x100);
+
+        let mut v5 = ChunkWrapper::new(RafsVersion::V5);
+        v5.copy_from(&v6);
+        assert_eq!(v5.blob_index(), 20);
+        assert_eq!(v5.compressed_offset(), 0x3000);
+        assert_eq!(v5.compressed_size(), 0x100);
+    }
+
+    #[test]
+    fn test_chunk_wrapper_display_v5() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V5);
+        wrapper.set_blob_index(1);
+        wrapper.set_index(2);
+        wrapper.set_file_offset(0x100);
+        wrapper.set_compressed_offset(0x200);
+        wrapper.set_compressed_size(0x50);
+        wrapper.set_uncompressed_offset(0x300);
+        wrapper.set_uncompressed_size(0x80);
+
+        let display = format!("{}", wrapper);
+        assert!(display.contains("blob_index 1"));
+        assert!(display.contains("index 2"));
+        assert!(display.contains("file_offset 256"));
+        assert!(display.contains("compressed 512/80"));
+        assert!(display.contains("uncompressed 768/128"));
+    }
+
+    #[test]
+    fn test_chunk_wrapper_display_v6() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V6);
+        wrapper.set_blob_index(5);
+        wrapper.set_compressed_offset(0x1000);
+        wrapper.set_compressed_size(0x100);
+        wrapper.set_uncompressed_offset(0x2000);
+        wrapper.set_uncompressed_size(0x200);
+
+        let display = format!("{}", wrapper);
+        assert!(display.contains("blob_index 5"));
+        assert!(display.contains("compressed 4096/256"));
+        assert!(display.contains("uncompressed 8192/512"));
+    }
+
+    #[test]
+    fn test_chunk_wrapper_display_with_crc32() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V5);
+        wrapper.set_has_crc32(true);
+        wrapper.set_crc32(0xaabb);
+        let display = format!("{}", wrapper);
+        assert!(display.contains("crc32 0xaabb"));
+    }
+
+    #[test]
+    fn test_chunk_wrapper_debug_v5() {
+        let wrapper = ChunkWrapper::new(RafsVersion::V5);
+        let debug = format!("{:?}", wrapper);
+        assert!(debug.contains("RafsV5ChunkInfo"));
+    }
+
+    #[test]
+    fn test_chunk_wrapper_debug_v6() {
+        let wrapper = ChunkWrapper::new(RafsVersion::V6);
+        let debug = format!("{:?}", wrapper);
+        assert!(debug.contains("RafsV5ChunkInfo"));
+    }
+
+    #[test]
+    fn test_chunk_wrapper_from_chunk_info() {
+        let mock = MockChunkInfo::mock(100, 200, 50, 300, 60);
+        let wrapper = ChunkWrapper::from_chunk_info(Arc::new(mock));
+        assert_eq!(wrapper.compressed_offset(), 200);
+        assert_eq!(wrapper.compressed_size(), 50);
+        assert_eq!(wrapper.uncompressed_offset(), 300);
+        assert_eq!(wrapper.uncompressed_size(), 60);
+    }
+
+    #[test]
+    fn test_chunk_wrapper_set_batch_v5() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V5);
+        assert!(!wrapper.is_batch());
+        wrapper.set_batch(true);
+        assert!(wrapper.is_batch());
+        wrapper.set_batch(false);
+        assert!(!wrapper.is_batch());
+    }
+
+    #[test]
+    fn test_chunk_wrapper_set_batch_v6() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V6);
+        assert!(!wrapper.is_batch());
+        wrapper.set_batch(true);
+        assert!(wrapper.is_batch());
+        wrapper.set_batch(false);
+        assert!(!wrapper.is_batch());
+    }
+
+    #[test]
+    fn test_chunk_wrapper_set_compressed_v5() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V5);
+        assert!(!wrapper.is_compressed());
+        wrapper.set_compressed(true);
+        assert!(wrapper.is_compressed());
+        wrapper.set_compressed(false);
+        assert!(!wrapper.is_compressed());
+    }
+
+    #[test]
+    fn test_chunk_wrapper_id_roundtrip() {
+        let mut wrapper = ChunkWrapper::new(RafsVersion::V5);
+        let dig = RafsDigest::from_buf([0xab; 32].as_slice(), digest::Algorithm::Sha256);
+        wrapper.set_id(dig);
+        assert_eq!(*wrapper.id(), dig);
+    }
 }
