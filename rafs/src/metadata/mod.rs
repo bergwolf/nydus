@@ -1323,4 +1323,263 @@ mod tests {
         assert!(meta1.get_config().check_compatibility(&meta5).is_err());
         assert!(meta1.get_config().check_compatibility(&meta6).is_err());
     }
+
+    #[test]
+    fn test_rafs_version_try_from() {
+        assert_eq!(
+            RafsVersion::try_from(RAFS_SUPER_VERSION_V5).unwrap(),
+            RafsVersion::V5
+        );
+        assert_eq!(
+            RafsVersion::try_from(RAFS_SUPER_VERSION_V6).unwrap(),
+            RafsVersion::V6
+        );
+        assert!(RafsVersion::try_from(0).is_err());
+        assert!(RafsVersion::try_from(0x400u32).is_err());
+        assert!(RafsVersion::try_from(0x700).is_err());
+    }
+
+    #[test]
+    fn test_rafs_version_into_u32() {
+        assert_eq!(u32::from(RafsVersion::V5), RAFS_SUPER_VERSION_V5);
+        assert_eq!(u32::from(RafsVersion::V6), RAFS_SUPER_VERSION_V6);
+    }
+
+    #[test]
+    fn test_rafs_version_display() {
+        assert_eq!(format!("{}", RafsVersion::V5), "5");
+        assert_eq!(format!("{}", RafsVersion::V6), "6");
+    }
+
+    #[test]
+    fn test_rafs_version_is_v5_v6() {
+        assert!(RafsVersion::V5.is_v5());
+        assert!(!RafsVersion::V5.is_v6());
+        assert!(RafsVersion::V6.is_v6());
+        assert!(!RafsVersion::V6.is_v5());
+    }
+
+    #[test]
+    fn test_rafs_version_default() {
+        let v = RafsVersion::default();
+        assert_eq!(v, RafsVersion::V5);
+    }
+
+    #[test]
+    fn test_rafs_super_meta_is_v5_v6() {
+        let mut meta = RafsSuperMeta::default();
+        assert!(!meta.is_v5());
+        assert!(!meta.is_v6());
+
+        meta.version = RAFS_SUPER_VERSION_V5;
+        assert!(meta.is_v5());
+        assert!(!meta.is_v6());
+
+        meta.version = RAFS_SUPER_VERSION_V6;
+        assert!(!meta.is_v5());
+        assert!(meta.is_v6());
+    }
+
+    #[test]
+    fn test_rafs_super_meta_is_chunk_dict() {
+        let mut meta = RafsSuperMeta::default();
+        assert!(!meta.is_chunk_dict());
+
+        meta.is_chunk_dict = true;
+        assert!(meta.is_chunk_dict());
+    }
+
+    #[test]
+    fn test_rafs_super_meta_explicit_uidgid() {
+        let mut meta = RafsSuperMeta::default();
+        assert!(!meta.explicit_uidgid());
+
+        meta.flags |= RafsSuperFlags::EXPLICIT_UID_GID;
+        assert!(meta.explicit_uidgid());
+    }
+
+    #[test]
+    fn test_rafs_super_meta_has_xattr() {
+        let mut meta = RafsSuperMeta::default();
+        assert!(!meta.has_xattr());
+
+        meta.flags |= RafsSuperFlags::HAS_XATTR;
+        assert!(meta.has_xattr());
+    }
+
+    #[test]
+    fn test_rafs_super_meta_compressor_for_unknown_version() {
+        let mut meta = RafsSuperMeta::default();
+        meta.version = 0; // Not v5 or v6
+        meta.flags |= RafsSuperFlags::COMPRESSION_GZIP;
+        // For unknown versions, get_compressor returns None
+        assert_eq!(meta.get_compressor(), compress::Algorithm::None);
+    }
+
+    #[test]
+    fn test_rafs_super_meta_digester_for_unknown_version() {
+        let mut meta = RafsSuperMeta::default();
+        meta.version = 0;
+        meta.flags |= RafsSuperFlags::HASH_SHA256;
+        // For unknown versions, get_digester returns Blake3
+        assert_eq!(meta.get_digester(), digest::Algorithm::Blake3);
+    }
+
+    #[test]
+    fn test_rafs_super_meta_cipher_v5_returns_none() {
+        let mut meta = RafsSuperMeta::default();
+        meta.version = RAFS_SUPER_VERSION_V5;
+        meta.flags |= RafsSuperFlags::ENCRYPTION_ASE_128_XTS;
+        // Cipher only works for v6
+        assert_eq!(meta.get_cipher(), crypt::Algorithm::None);
+    }
+
+    #[test]
+    fn test_rafs_super_meta_cipher_v6() {
+        let mut meta = RafsSuperMeta::default();
+        meta.version = RAFS_SUPER_VERSION_V6;
+        meta.flags |= RafsSuperFlags::ENCRYPTION_ASE_128_XTS;
+        assert_eq!(meta.get_cipher(), crypt::Algorithm::Aes128Xts);
+    }
+
+    #[test]
+    fn test_rafs_super_meta_get_config_fields() {
+        let meta = get_meta(
+            4096,
+            true,
+            false,
+            RafsSuperFlags::HASH_SHA256,
+            RafsSuperFlags::COMPRESSION_ZSTD,
+            RafsSuperFlags::ENCRYPTION_NONE,
+            RAFS_SUPER_VERSION_V5,
+        );
+        let config = meta.get_config();
+        assert_eq!(config.chunk_size, 4096);
+        assert!(config.explicit_uidgid);
+        assert!(!config.is_tarfs_mode);
+        assert_eq!(config.compressor, compress::Algorithm::Zstd);
+        assert_eq!(config.digester, digest::Algorithm::Sha256);
+        assert_eq!(config.version, RafsVersion::V5);
+    }
+
+    #[test]
+    fn test_rafs_super_config_check_compatibility_success() {
+        let meta = get_meta(
+            2048,
+            false,
+            false,
+            RafsSuperFlags::HASH_BLAKE3,
+            RafsSuperFlags::COMPRESSION_LZ4,
+            RafsSuperFlags::ENCRYPTION_NONE,
+            RAFS_SUPER_VERSION_V5,
+        );
+        let config = meta.get_config();
+        assert!(config.check_compatibility(&meta).is_ok());
+    }
+
+    #[test]
+    fn test_rafs_super_flags_default() {
+        let flags = RafsSuperFlags::default();
+        assert!(flags.is_empty());
+        assert!(!flags.contains(RafsSuperFlags::COMPRESSION_NONE));
+        assert!(!flags.contains(RafsSuperFlags::HAS_XATTR));
+    }
+
+    #[test]
+    fn test_rafs_super_flags_display() {
+        let flags = RafsSuperFlags::COMPRESSION_LZ4 | RafsSuperFlags::HASH_BLAKE3;
+        let s = format!("{}", flags);
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn test_rafs_super_flags_digest_conversions() {
+        assert_eq!(
+            RafsSuperFlags::from(digest::Algorithm::Blake3),
+            RafsSuperFlags::HASH_BLAKE3
+        );
+        assert_eq!(
+            RafsSuperFlags::from(digest::Algorithm::Sha256),
+            RafsSuperFlags::HASH_SHA256
+        );
+    }
+
+    #[test]
+    fn test_rafs_super_flags_compress_conversions() {
+        assert_eq!(
+            RafsSuperFlags::from(compress::Algorithm::None),
+            RafsSuperFlags::COMPRESSION_NONE
+        );
+        assert_eq!(
+            RafsSuperFlags::from(compress::Algorithm::Lz4Block),
+            RafsSuperFlags::COMPRESSION_LZ4
+        );
+        assert_eq!(
+            RafsSuperFlags::from(compress::Algorithm::GZip),
+            RafsSuperFlags::COMPRESSION_GZIP
+        );
+        assert_eq!(
+            RafsSuperFlags::from(compress::Algorithm::Zstd),
+            RafsSuperFlags::COMPRESSION_ZSTD
+        );
+    }
+
+    #[test]
+    fn test_rafs_super_flags_crypt_conversions() {
+        assert_eq!(
+            RafsSuperFlags::from(crypt::Algorithm::Aes128Xts),
+            RafsSuperFlags::ENCRYPTION_ASE_128_XTS
+        );
+        assert_eq!(
+            RafsSuperFlags::from(crypt::Algorithm::None),
+            RafsSuperFlags::ENCRYPTION_NONE
+        );
+    }
+
+    #[test]
+    fn test_rafs_super_meta_inlined_chunk_digest_requires_v6() {
+        let mut meta = RafsSuperMeta::default();
+        meta.flags |= RafsSuperFlags::INLINED_CHUNK_DIGEST;
+
+        // Not v6, so should be false
+        meta.version = RAFS_SUPER_VERSION_V5;
+        assert!(!meta.has_inlined_chunk_digest());
+
+        // v6 with flag, should be true
+        meta.version = RAFS_SUPER_VERSION_V6;
+        assert!(meta.has_inlined_chunk_digest());
+    }
+
+    #[test]
+    fn test_rafs_super_meta_default_values() {
+        let meta = RafsSuperMeta::default();
+        assert_eq!(meta.magic, 0);
+        assert_eq!(meta.version, 0);
+        assert_eq!(meta.sb_size, 0);
+        assert_eq!(meta.root_inode, 0);
+        assert_eq!(meta.chunk_size, 0);
+        assert_eq!(meta.batch_size, 0);
+        assert_eq!(meta.inodes_count, 0);
+        assert!(meta.flags.is_empty());
+        assert_eq!(meta.inode_table_entries, 0);
+        assert_eq!(meta.inode_table_offset, 0);
+        assert_eq!(meta.blob_table_size, 0);
+        assert_eq!(meta.blob_table_offset, 0);
+    }
+
+    #[test]
+    fn test_rafs_mode_default() {
+        let mode = RafsMode::default();
+        assert_eq!(mode, RafsMode::Direct);
+    }
+
+    #[test]
+    fn test_rafs_super_new_cached_mode() {
+        let cfg = RafsConfigV2 {
+            mode: "cached".into(),
+            ..RafsConfigV2::default()
+        };
+        let mut rs = RafsSuper::new(&cfg).unwrap();
+        rs.destroy();
+    }
 }

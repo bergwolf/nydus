@@ -435,4 +435,327 @@ mod tests {
         assert!(MetaRange::new(24, 16, true).unwrap().intersect_with(&range));
         assert!(!MetaRange::new(32, 8, true).unwrap().intersect_with(&range));
     }
+
+    #[test]
+    fn test_bytes_to_os_str() {
+        let buf = b"hello";
+        let os_str = bytes_to_os_str(buf);
+        assert_eq!(os_str, OsStr::from_bytes(b"hello"));
+
+        let empty = bytes_to_os_str(b"");
+        assert_eq!(empty, OsStr::new(""));
+
+        // Non-UTF8 bytes
+        let non_utf8 = bytes_to_os_str(&[0xff, 0xfe]);
+        assert_eq!(non_utf8.as_bytes(), &[0xff, 0xfe]);
+    }
+
+    #[test]
+    fn test_parse_string_empty() {
+        let (str1, str2) = parse_string(b"").unwrap();
+        assert_eq!(str1, "");
+        assert_eq!(str2, "");
+    }
+
+    #[test]
+    fn test_parse_string_only_null() {
+        let (str1, str2) = parse_string(&[0]).unwrap();
+        assert_eq!(str1, "");
+        assert_eq!(str2, "");
+    }
+
+    #[test]
+    fn test_parse_string_multi_segments() {
+        // Only splits on first null
+        let (str1, str2) = parse_string(b"foo\0bar\0baz").unwrap();
+        assert_eq!(str1, "foo");
+        assert_eq!(str2, "bar\0baz");
+    }
+
+    #[test]
+    fn test_parse_xattr_value_not_found() {
+        let buf = [0x3u8, 0x0, 0x0, 0x0, b'a', 0, b'b'];
+        let value = parse_xattr_value(&buf, 7, &OsString::from("z")).unwrap();
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn test_parse_xattr_data_too_small() {
+        let buf = [0x3u8, 0x0, 0x0, 0x0, b'a', 0, b'b'];
+        // size larger than data length
+        assert!(parse_xattr(&buf, 100, |_, _| true).is_err());
+    }
+
+    #[test]
+    fn test_parse_xattr_callback_break() {
+        // Build xattr data with two pairs
+        let mut buf = Vec::new();
+        // pair 1: "k1\0v1" (size=5)
+        buf.extend_from_slice(&5u32.to_le_bytes());
+        buf.extend_from_slice(b"k1\0v1");
+        // pair 2: "k2\0v2" (size=5)
+        buf.extend_from_slice(&5u32.to_le_bytes());
+        buf.extend_from_slice(b"k2\0v2");
+
+        let total_size = buf.len();
+        let mut count = 0;
+        parse_xattr(&buf, total_size, |_name, _value| {
+            count += 1;
+            false // stop after first
+        })
+        .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_parse_xattr_names_multiple() {
+        let mut buf = Vec::new();
+        // pair 1: "key1\0val1" (size=9)
+        buf.extend_from_slice(&9u32.to_le_bytes());
+        buf.extend_from_slice(b"key1\0val1");
+        // pair 2: "key2\0val2" (size=9)
+        buf.extend_from_slice(&9u32.to_le_bytes());
+        buf.extend_from_slice(b"key2\0val2");
+
+        let total_size = buf.len();
+        let names = parse_xattr_names(&buf, total_size).unwrap();
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0], b"key1");
+        assert_eq!(names[1], b"key2");
+    }
+
+    #[test]
+    fn test_parse_xattr_value_with_empty_value() {
+        // pair: "name\0" (size=5, value is empty)
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&5u32.to_le_bytes());
+        buf.extend_from_slice(b"name\0");
+
+        let total_size = buf.len();
+        let value = parse_xattr_value(&buf, total_size, &OsString::from("name")).unwrap();
+        assert_eq!(value, Some(vec![]));
+    }
+
+    #[test]
+    fn test_rafs_xattrs_new_empty() {
+        let xattrs = RafsXAttrs::new();
+        assert!(xattrs.is_empty());
+        assert_eq!(xattrs.size(), 0);
+    }
+
+    #[test]
+    fn test_rafs_xattrs_add_and_get() {
+        let mut xattrs = RafsXAttrs::new();
+        xattrs
+            .add(OsString::from("user.key1"), b"value1".to_vec())
+            .unwrap();
+        assert!(!xattrs.is_empty());
+
+        let val = xattrs.get(OsStr::new("user.key1"));
+        assert_eq!(val, Some(&b"value1".to_vec()));
+
+        let val = xattrs.get(OsStr::new("nonexistent"));
+        assert_eq!(val, None);
+    }
+
+    #[test]
+    fn test_rafs_xattrs_add_invalid_prefix() {
+        let mut xattrs = RafsXAttrs::new();
+        let result = xattrs.add(OsString::from("invalid.key"), b"val".to_vec());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rafs_xattrs_add_valid_prefixes() {
+        let mut xattrs = RafsXAttrs::new();
+        assert!(xattrs
+            .add(OsString::from("user.test"), b"v".to_vec())
+            .is_ok());
+        assert!(xattrs
+            .add(OsString::from("security.test"), b"v".to_vec())
+            .is_ok());
+        assert!(xattrs
+            .add(OsString::from("trusted.test"), b"v".to_vec())
+            .is_ok());
+        assert!(xattrs
+            .add(
+                OsString::from("system.posix_acl_access"),
+                b"v".to_vec()
+            )
+            .is_ok());
+        assert!(xattrs
+            .add(
+                OsString::from("system.posix_acl_default"),
+                b"v".to_vec()
+            )
+            .is_ok());
+        assert_eq!(xattrs.size() > 0, true);
+    }
+
+    #[test]
+    fn test_rafs_xattrs_add_too_long_key() {
+        let mut xattrs = RafsXAttrs::new();
+        // Key longer than 255 bytes
+        let long_key = format!("user.{}", "a".repeat(252));
+        assert!(long_key.len() > 255);
+        let result = xattrs.add(OsString::from(long_key), b"val".to_vec());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rafs_xattrs_add_too_long_value() {
+        let mut xattrs = RafsXAttrs::new();
+        // Value longer than 0x10000 bytes
+        let long_value = vec![0u8; 0x10001];
+        let result = xattrs.add(OsString::from("user.key"), long_value);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rafs_xattrs_remove() {
+        let mut xattrs = RafsXAttrs::new();
+        xattrs
+            .add(OsString::from("user.key1"), b"val1".to_vec())
+            .unwrap();
+        xattrs
+            .add(OsString::from("user.key2"), b"val2".to_vec())
+            .unwrap();
+        assert!(!xattrs.is_empty());
+
+        xattrs.remove(OsStr::new("user.key1"));
+        assert_eq!(xattrs.get(OsStr::new("user.key1")), None);
+        assert!(xattrs.get(OsStr::new("user.key2")).is_some());
+
+        xattrs.remove(OsStr::new("user.key2"));
+        assert!(xattrs.is_empty());
+    }
+
+    #[test]
+    fn test_rafs_xattrs_remove_nonexistent() {
+        let mut xattrs = RafsXAttrs::new();
+        // Removing a nonexistent key should not panic
+        xattrs.remove(OsStr::new("user.nope"));
+        assert!(xattrs.is_empty());
+    }
+
+    #[test]
+    fn test_rafs_xattrs_size_computation() {
+        let mut xattrs = RafsXAttrs::new();
+        xattrs
+            .add(OsString::from("user.k"), b"v".to_vec())
+            .unwrap();
+        // size = size_of::<u32>() + key.byte_size() + 1 (null separator) + value.len()
+        // = 4 + 6 + 1 + 1 = 12
+        assert_eq!(xattrs.size(), 4 + "user.k".len() + 1 + 1);
+    }
+
+    #[test]
+    fn test_rafs_xattrs_overwrite() {
+        let mut xattrs = RafsXAttrs::new();
+        xattrs
+            .add(OsString::from("user.key"), b"old".to_vec())
+            .unwrap();
+        xattrs
+            .add(OsString::from("user.key"), b"new".to_vec())
+            .unwrap();
+        assert_eq!(xattrs.get(OsStr::new("user.key")), Some(&b"new".to_vec()));
+    }
+
+    #[test]
+    fn test_rafs_xattrs_debug() {
+        let xattrs = RafsXAttrs::new();
+        let debug_str = format!("{:?}", xattrs);
+        assert!(debug_str.contains("extended attributes"));
+    }
+
+    #[test]
+    fn test_meta_range_unaligned_size_allowed() {
+        // aligned_size=false allows non-aligned sizes
+        assert!(MetaRange::new(8, 1, false).is_ok());
+        assert!(MetaRange::new(8, 3, false).is_ok());
+        assert!(MetaRange::new(8, 7, false).is_ok());
+    }
+
+    #[test]
+    fn test_meta_range_unaligned_start_fails() {
+        // Unaligned start always fails regardless of aligned_size flag
+        assert!(MetaRange::new(1, 8, true).is_err());
+        assert!(MetaRange::new(3, 8, false).is_err());
+    }
+
+    #[test]
+    fn test_meta_range_zero_start_and_size() {
+        let range = MetaRange::new(0, 0, true).unwrap();
+        assert_eq!(range.start(), 0);
+        assert_eq!(range.size(), 0);
+        assert_eq!(range.end(), 0);
+    }
+
+    #[test]
+    fn test_meta_range_overflow_fails() {
+        // start + size would overflow u64
+        assert!(MetaRange::new(u64::MAX - 8 + 1, 16, false).is_err());
+    }
+
+    #[test]
+    fn test_meta_range_self_subrange() {
+        let range = MetaRange::new(16, 16, true).unwrap();
+        assert!(range.is_subrange_of(&range));
+    }
+
+    #[test]
+    fn test_meta_range_self_intersect() {
+        let range = MetaRange::new(16, 16, true).unwrap();
+        assert!(range.intersect_with(&range));
+    }
+
+    #[test]
+    fn test_meta_range_zero_size_subrange() {
+        let parent = MetaRange::new(16, 16, true).unwrap();
+        let empty = MetaRange::new(16, 0, true).unwrap();
+        assert!(empty.is_subrange_of(&parent));
+    }
+
+    #[test]
+    fn test_meta_range_zero_size_no_intersect() {
+        let parent = MetaRange::new(16, 16, true).unwrap();
+        let empty = MetaRange::new(16, 0, true).unwrap();
+        // Zero-size range has start == end, so start < other.end but end == start is not > other.start
+        assert!(!empty.intersect_with(&parent));
+    }
+
+    #[test]
+    fn test_super_version_constants() {
+        assert_eq!(RAFS_SUPER_VERSION_V4, 0x400);
+        assert_eq!(RAFS_SUPER_VERSION_V5, 0x500);
+        assert_eq!(RAFS_SUPER_VERSION_V6, 0x600);
+        assert_eq!(RAFS_SUPER_MIN_VERSION, RAFS_SUPER_VERSION_V4);
+    }
+
+    #[test]
+    fn test_rafs_v5_root_inode() {
+        assert_eq!(RAFS_V5_ROOT_INODE, ROOT_ID);
+    }
+
+    #[test]
+    fn test_rafs_xattr_prefixes() {
+        assert_eq!(RAFS_XATTR_PREFIXES.len(), 5);
+        assert!(RAFS_XATTR_PREFIXES.contains(&"user."));
+        assert!(RAFS_XATTR_PREFIXES.contains(&"security."));
+        assert!(RAFS_XATTR_PREFIXES.contains(&"trusted."));
+    }
+
+    #[test]
+    fn test_parse_xattr_inconsistent_pair_size() {
+        // pair_size says 100 but only 3 bytes of pair data available
+        let buf = [100u8, 0x0, 0x0, 0x0, b'a', 0, b'b'];
+        assert!(parse_xattr_names(&buf, 7).is_err());
+    }
+
+    #[test]
+    fn test_parse_xattr_truncated_size_field() {
+        // size field is only 2 bytes instead of 4
+        let buf = [0x3u8, 0x0];
+        assert!(parse_xattr_names(&buf, 2).is_err());
+    }
 }

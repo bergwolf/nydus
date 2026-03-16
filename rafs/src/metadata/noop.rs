@@ -118,4 +118,73 @@ mod tests {
         assert!(blk.get_blob_infos().is_empty());
         blk.destroy();
     }
+
+    #[test]
+    fn test_noop_super_block_default() {
+        let blk = NoopSuperBlock::default();
+        assert!(blk.get_blob_infos().is_empty());
+    }
+
+    #[test]
+    fn test_noop_super_block_destroy_multiple() {
+        let mut blk = NoopSuperBlock::new();
+        blk.destroy();
+        blk.destroy();
+        // Calling destroy multiple times should be fine
+        assert!(blk.get_blob_infos().is_empty());
+    }
+
+    #[test]
+    fn test_noop_super_block_blob_infos_returns_empty_vec() {
+        let blk = NoopSuperBlock::new();
+        let infos = blk.get_blob_infos();
+        assert_eq!(infos.len(), 0);
+        assert!(infos.is_empty());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_noop_load_panics() {
+        use std::fs::OpenOptions;
+        use vmm_sys_util::tempfile::TempFile;
+
+        let mut blk = NoopSuperBlock::new();
+        let temp = TempFile::new().unwrap();
+        let f = OpenOptions::new()
+            .read(true)
+            .open(temp.as_path())
+            .unwrap();
+        let mut reader: Box<dyn crate::RafsIoRead> = Box::new(f);
+        blk.load(&mut reader).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_noop_update_panics() {
+        use std::fs::OpenOptions;
+        use vmm_sys_util::tempfile::TempFile;
+
+        let blk = NoopSuperBlock::new();
+        let temp = TempFile::new().unwrap();
+        let f = OpenOptions::new()
+            .read(true)
+            .open(temp.as_path())
+            .unwrap();
+        let mut reader: Box<dyn crate::RafsIoRead> = Box::new(f);
+        blk.update(&mut reader).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_noop_get_inode_with_validate() {
+        let blk = NoopSuperBlock::new();
+        blk.get_inode(1, true).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_noop_get_extended_inode_with_validate() {
+        let blk = NoopSuperBlock::new();
+        blk.get_extended_inode(1, true).unwrap();
+    }
 }

@@ -165,4 +165,66 @@ mod tests {
         assert!(blk.get_extended_inode(0, true).is_ok());
         blk.destroy();
     }
+
+    #[test]
+    fn test_mock_super_block_default() {
+        let blk = MockSuperBlock::default();
+        assert!(blk.inodes.is_empty());
+    }
+
+    #[test]
+    fn test_mock_super_block_multiple_inodes() {
+        let mut blk = MockSuperBlock::new();
+        for i in 0..10 {
+            let node = MockInode::mock(i, i * 100, vec![]);
+            blk.inodes.insert(i, Arc::new(node));
+        }
+        for i in 0..10 {
+            let inode = blk.get_inode(i, false).unwrap();
+            assert_eq!(inode.ino(), i);
+            assert_eq!(inode.size(), i * 100);
+        }
+        assert!(blk.get_inode(10, false).is_err());
+    }
+
+    #[test]
+    fn test_mock_super_block_extended_inode_access() {
+        let mut blk = MockSuperBlock::new();
+        let node = MockInode::mock(5, 200, vec![]);
+        blk.inodes.insert(5, Arc::new(node));
+
+        let ext_inode = blk.get_extended_inode(5, false).unwrap();
+        assert_eq!(ext_inode.ino(), 5);
+        assert_eq!(ext_inode.size(), 200);
+    }
+
+    #[test]
+    fn test_mock_super_block_overwrite_inode() {
+        let mut blk = MockSuperBlock::new();
+        let node1 = MockInode::mock(1, 100, vec![]);
+        blk.inodes.insert(1, Arc::new(node1));
+        assert_eq!(blk.get_inode(1, false).unwrap().size(), 100);
+
+        // Overwrite with a different size
+        let node2 = MockInode::mock(1, 999, vec![]);
+        blk.inodes.insert(1, Arc::new(node2));
+        assert_eq!(blk.get_inode(1, false).unwrap().size(), 999);
+    }
+
+    #[test]
+    fn test_mock_super_block_destroy_is_noop() {
+        let mut blk = MockSuperBlock::new();
+        blk.inodes
+            .insert(0, Arc::new(MockInode::mock(0, 50, vec![])));
+        blk.destroy();
+        // destroy is a no-op, inodes should still be accessible
+        assert!(blk.get_inode(0, false).is_ok());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_mock_super_block_get_blob_infos_panics() {
+        let blk = MockSuperBlock::new();
+        blk.get_blob_infos();
+    }
 }

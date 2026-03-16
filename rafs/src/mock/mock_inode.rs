@@ -401,4 +401,316 @@ mod tests {
         node.collect_descendants_inodes(&mut inodes).unwrap();
         assert_eq!(inodes.len(), 2);
     }
+
+    #[test]
+    fn test_mock_inode_default() {
+        let node = MockInode::default();
+        assert_eq!(node.ino(), 0);
+        assert_eq!(node.size(), 0);
+        assert_eq!(node.rdev(), 0);
+        assert_eq!(node.projid(), 0);
+        assert_eq!(node.parent(), 0);
+        assert_eq!(node.get_child_count(), 0);
+        assert_eq!(node.get_child_index().unwrap(), 0);
+        assert_eq!(node.get_chunk_count(), 0);
+        assert!(!node.has_xattr());
+        assert_eq!(node.flags(), 0);
+        assert_eq!(node.name(), "");
+        assert_eq!(node.get_name_size(), 0);
+    }
+
+    #[test]
+    fn test_mock_inode_mock_constructor() {
+        let chunk = Arc::new(MockChunkInfo::mock(0, 100, 50, 200, 50));
+        let node = MockInode::mock(42, 1000, vec![chunk]);
+
+        assert_eq!(node.ino(), 42);
+        assert_eq!(node.size(), 1000);
+        assert_eq!(node.get_child_count(), 1);
+        assert!(node.is_reg()); // default mode is S_IFREG
+        assert!(!node.is_dir());
+        assert!(!node.is_symlink());
+        assert_eq!(node.i_blksize, CHUNK_SIZE);
+    }
+
+    #[test]
+    fn test_mock_inode_symlink() {
+        let mut node = MockInode::mock(10, 100, vec![]);
+        node.i_mode = libc::S_IFLNK as u32;
+        node.i_target = OsString::from("/target/path");
+
+        assert!(node.is_symlink());
+        assert!(!node.is_reg());
+        assert!(!node.is_dir());
+
+        let symlink = node.get_symlink().unwrap();
+        assert_eq!(symlink, OsString::from("/target/path"));
+        assert_eq!(node.get_symlink_size(), "/target/path".len() as u16);
+    }
+
+    #[test]
+    fn test_mock_inode_symlink_validate_fail() {
+        let mut node = MockInode::mock(10, 100, vec![]);
+        node.i_mode = libc::S_IFLNK as u32;
+        // Empty target for a symlink should fail validation
+        assert!(node.validate(100, 100).is_err());
+    }
+
+    #[test]
+    fn test_mock_inode_symlink_validate_ok() {
+        let mut node = MockInode::mock(10, 100, vec![]);
+        node.i_mode = libc::S_IFLNK as u32;
+        node.i_target = OsString::from("/some/target");
+        assert!(node.validate(100, 100).is_ok());
+    }
+
+    #[test]
+    fn test_mock_inode_non_symlink_get_symlink_error() {
+        let node = MockInode::mock(10, 100, vec![]);
+        // Default mode is S_IFREG, not symlink
+        assert!(node.get_symlink().is_err());
+        assert_eq!(node.get_symlink_size(), 0);
+    }
+
+    #[test]
+    fn test_mock_inode_file_type_blkdev() {
+        let mut node = MockInode::mock(1, 0, vec![]);
+        node.i_mode = libc::S_IFBLK as u32;
+        assert!(node.is_blkdev());
+        assert!(!node.is_chrdev());
+        assert!(!node.is_sock());
+        assert!(!node.is_fifo());
+        assert!(!node.is_dir());
+        assert!(!node.is_symlink());
+        assert!(!node.is_reg());
+    }
+
+    #[test]
+    fn test_mock_inode_file_type_chrdev() {
+        let mut node = MockInode::mock(1, 0, vec![]);
+        node.i_mode = libc::S_IFCHR as u32;
+        assert!(!node.is_blkdev());
+        assert!(node.is_chrdev());
+        assert!(!node.is_sock());
+        assert!(!node.is_fifo());
+        assert!(!node.is_dir());
+        assert!(!node.is_symlink());
+        assert!(!node.is_reg());
+    }
+
+    #[test]
+    fn test_mock_inode_file_type_sock() {
+        let mut node = MockInode::mock(1, 0, vec![]);
+        node.i_mode = libc::S_IFSOCK as u32;
+        assert!(node.is_sock());
+        assert!(!node.is_blkdev());
+        assert!(!node.is_chrdev());
+        assert!(!node.is_fifo());
+        assert!(!node.is_dir());
+        assert!(!node.is_symlink());
+        assert!(!node.is_reg());
+    }
+
+    #[test]
+    fn test_mock_inode_file_type_fifo() {
+        let mut node = MockInode::mock(1, 0, vec![]);
+        node.i_mode = libc::S_IFIFO as u32;
+        assert!(node.is_fifo());
+        assert!(!node.is_blkdev());
+        assert!(!node.is_chrdev());
+        assert!(!node.is_sock());
+        assert!(!node.is_dir());
+        assert!(!node.is_symlink());
+        assert!(!node.is_reg());
+    }
+
+    #[test]
+    fn test_mock_inode_hardlink() {
+        let mut node = MockInode::mock(1, 100, vec![]);
+        // Regular file with nlink <= 1 is not a hardlink
+        assert!(!node.is_hardlink());
+
+        // Regular file with nlink > 1 is a hardlink
+        node.i_nlink = 2;
+        assert!(node.is_hardlink());
+
+        // Directory with nlink > 1 is NOT a hardlink
+        node.i_mode = libc::S_IFDIR as u32;
+        node.i_nlink = 3;
+        assert!(!node.is_hardlink());
+    }
+
+    #[test]
+    fn test_mock_inode_xattr_not_found() {
+        let node = MockInode::mock(1, 100, vec![]);
+        // No xattrs set, querying should return None
+        assert_eq!(node.get_xattr(OsStr::new("nonexistent")).unwrap(), None);
+    }
+
+    #[test]
+    fn test_mock_inode_xattr_empty_list() {
+        let node = MockInode::mock(1, 100, vec![]);
+        assert!(!node.has_xattr());
+        let xattrs = node.get_xattrs().unwrap();
+        assert!(xattrs.is_empty());
+    }
+
+    #[test]
+    fn test_mock_inode_get_attr_fields() {
+        let mut node = MockInode::mock(42, 4096, vec![]);
+        node.i_blocks = 8;
+        node.i_nlink = 3;
+        node.i_rdev = 99;
+        node.i_mode = libc::S_IFREG as u32 | 0o755;
+
+        let attr = node.get_attr();
+        assert_eq!(attr.ino, 42);
+        assert_eq!(attr.size, 4096);
+        assert_eq!(attr.blocks, 8);
+        assert_eq!(attr.nlink, 3);
+        assert_eq!(attr.rdev, 99);
+        assert_eq!(attr.mode, libc::S_IFREG as u32 | 0o755);
+    }
+
+    #[test]
+    fn test_mock_inode_get_entry_fields() {
+        let node = MockInode::mock(7, 512, vec![]);
+        let entry = node.get_entry();
+        assert_eq!(entry.inode, 7);
+        assert_eq!(entry.generation, 0);
+        assert_eq!(entry.attr_flags, 0);
+    }
+
+    #[test]
+    fn test_mock_inode_get_child_by_name_not_found() {
+        let mut node = MockInode::mock(1, 0, vec![]);
+        node.i_mode = libc::S_IFDIR as u32;
+        let mut child = MockInode::mock(2, 0, vec![]);
+        child.i_name = OsStr::new("existing").into();
+        node.i_child.push(Arc::new(child));
+
+        assert!(node.get_child_by_name(OsStr::new("nonexistent")).is_err());
+    }
+
+    #[test]
+    fn test_mock_inode_collect_descendants_not_dir() {
+        let node = MockInode::mock(1, 100, vec![]);
+        // Regular file, not a dir
+        let mut descendants = Vec::new();
+        assert!(node.collect_descendants_inodes(&mut descendants).is_err());
+    }
+
+    #[test]
+    fn test_mock_inode_collect_descendants_empty_children_skipped() {
+        let mut dir = MockInode::mock(1, 0, vec![]);
+        dir.i_mode = libc::S_IFDIR as u32;
+
+        // Add a child with zero size - should be skipped
+        let mut child = MockInode::mock(2, 0, vec![]);
+        child.i_name = OsStr::new("empty_file").into();
+        child.i_size = 0;
+        dir.i_child.push(Arc::new(child));
+
+        // Add a child with nonzero size - should be collected
+        let mut child2 = MockInode::mock(3, 100, vec![]);
+        child2.i_name = OsStr::new("nonempty_file").into();
+        dir.i_child.push(Arc::new(child2));
+
+        let mut descendants = Vec::new();
+        dir.collect_descendants_inodes(&mut descendants).unwrap();
+        assert_eq!(descendants.len(), 1);
+        assert_eq!(descendants[0].ino(), 3);
+    }
+
+    #[test]
+    fn test_mock_inode_collect_descendants_nested_dirs() {
+        let mut root = MockInode::mock(1, 0, vec![]);
+        root.i_mode = libc::S_IFDIR as u32;
+
+        let mut subdir = MockInode::mock(2, 0, vec![]);
+        subdir.i_mode = libc::S_IFDIR as u32;
+        subdir.i_name = OsStr::new("subdir").into();
+
+        let mut leaf = MockInode::mock(3, 50, vec![]);
+        leaf.i_name = OsStr::new("leaf").into();
+        subdir.i_child.push(Arc::new(leaf));
+
+        root.i_child.push(Arc::new(subdir));
+
+        let mut descendants = Vec::new();
+        root.collect_descendants_inodes(&mut descendants).unwrap();
+        assert_eq!(descendants.len(), 1);
+        assert_eq!(descendants[0].ino(), 3);
+    }
+
+    #[test]
+    fn test_mock_inode_as_any_downcast() {
+        let node = MockInode::mock(99, 512, vec![]);
+        let any = node.as_any();
+        let recovered = any.downcast_ref::<MockInode>().unwrap();
+        assert_eq!(recovered.ino(), 99);
+        assert_eq!(recovered.size(), 512);
+    }
+
+    #[test]
+    fn test_mock_inode_as_inode() {
+        let node = MockInode::mock(55, 256, vec![]);
+        let inode = node.as_inode();
+        assert_eq!(inode.ino(), 55);
+        assert_eq!(inode.size(), 256);
+    }
+
+    #[test]
+    fn test_mock_inode_mode_with_permissions() {
+        let mut node = MockInode::mock(1, 0, vec![]);
+        // Directory with rwxr-xr-x
+        node.i_mode = libc::S_IFDIR as u32 | 0o755;
+        assert!(node.is_dir());
+        assert!(!node.is_reg());
+        assert_eq!(node.get_attr().mode, libc::S_IFDIR as u32 | 0o755);
+    }
+
+    #[test]
+    fn test_mock_inode_is_empty_size() {
+        let node = MockInode::mock(1, 0, vec![]);
+        assert!(node.is_empty_size());
+
+        let node2 = MockInode::mock(2, 100, vec![]);
+        assert!(!node2.is_empty_size());
+    }
+
+    #[test]
+    fn test_mock_inode_rdev_and_projid() {
+        let mut node = MockInode::mock(1, 0, vec![]);
+        node.i_rdev = 42;
+        node.i_projid = 7;
+        assert_eq!(node.rdev(), 42);
+        assert_eq!(node.projid(), 7);
+    }
+
+    #[test]
+    fn test_mock_inode_v5_ops() {
+        let node = MockInode::mock(1, 100, vec![]);
+        assert!(!node.has_hole());
+        assert_eq!(node.get_chunk_size(), CHUNK_SIZE);
+        // get_blob_by_index always returns a default BlobInfo
+        let blob = node.get_blob_by_index(0).unwrap();
+        assert_eq!(blob.blob_id(), "");
+    }
+
+    #[test]
+    fn test_mock_inode_validate_regular_file() {
+        let node = MockInode::mock(1, 100, vec![]);
+        // Regular file should validate fine
+        assert!(node.validate(100, 100).is_ok());
+    }
+
+    #[test]
+    fn test_mock_inode_get_chunk_info_v5() {
+        let chunk = Arc::new(MockChunkInfo::mock(0, 100, 50, 200, 50));
+        let node = MockInode::mock(1, 100, vec![chunk]);
+        let chunk_info = node.get_chunk_info_v5(0).unwrap();
+        assert_eq!(chunk_info.file_offset(), 0);
+        assert_eq!(chunk_info.as_base().compressed_offset(), 100);
+    }
 }
