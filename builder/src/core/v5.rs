@@ -264,3 +264,187 @@ impl Bootstrap {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::node::{Node, NodeInfo};
+    use nydus_rafs::metadata::inode::InodeWrapper;
+    use nydus_rafs::metadata::layout::v5::RafsV5Inode;
+    use nydus_rafs::metadata::layout::RafsXAttrs;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    fn make_v5_file_node(name: &str, size: u64) -> Node {
+        let mut inode = InodeWrapper::V5(RafsV5Inode::default());
+        inode.set_mode(libc::S_IFREG as u32 | 0o644);
+        inode.set_name_size(name.len());
+        inode.set_size(size);
+        let info = NodeInfo {
+            explicit_uidgid: true,
+            src_dev: 0,
+            src_ino: 0,
+            rdev: 0,
+            source: PathBuf::from("/"),
+            path: PathBuf::from("/").join(name),
+            target: PathBuf::from("/").join(name),
+            target_vec: vec![OsString::from("/"), OsString::from(name)],
+            symlink: None,
+            xattrs: RafsXAttrs::default(),
+            v6_force_extended_inode: false,
+        };
+        Node::new(inode, info, 0)
+    }
+
+    fn make_v5_dir_node(name: &str) -> Node {
+        let mut inode = InodeWrapper::V5(RafsV5Inode::default());
+        inode.set_mode(libc::S_IFDIR as u32 | 0o755);
+        inode.set_name_size(name.len());
+        let info = NodeInfo {
+            explicit_uidgid: true,
+            src_dev: 0,
+            src_ino: 0,
+            rdev: 0,
+            source: PathBuf::from("/"),
+            path: PathBuf::from("/").join(name),
+            target: PathBuf::from("/").join(name),
+            target_vec: vec![OsString::from("/"), OsString::from(name)],
+            symlink: None,
+            xattrs: RafsXAttrs::default(),
+            v6_force_extended_inode: false,
+        };
+        Node::new(inode, info, 0)
+    }
+
+    #[test]
+    fn test_v5_set_inode_blocks_regular_file() {
+        let mut node = make_v5_file_node("test.txt", 4096);
+        node.v5_set_inode_blocks();
+        // blocks = div_round_up(size + xattr_size, 512) = div_round_up(4096 + 0, 512) = 8
+        assert_eq!(node.inode.blocks(), 8);
+    }
+
+    #[test]
+    fn test_v5_set_inode_blocks_small_file() {
+        let mut node = make_v5_file_node("small.txt", 100);
+        node.v5_set_inode_blocks();
+        // blocks = div_round_up(100, 512) = 1
+        assert_eq!(node.inode.blocks(), 1);
+    }
+
+    #[test]
+    fn test_v5_set_inode_blocks_zero_size() {
+        let mut node = make_v5_file_node("empty.txt", 0);
+        node.v5_set_inode_blocks();
+        // blocks = div_round_up(0, 512) = 0
+        assert_eq!(node.inode.blocks(), 0);
+    }
+
+    #[test]
+    fn test_v5_set_inode_blocks_exact_block_boundary() {
+        let mut node = make_v5_file_node("exact.txt", 512);
+        node.v5_set_inode_blocks();
+        // blocks = div_round_up(512, 512) = 1
+        assert_eq!(node.inode.blocks(), 1);
+    }
+
+    #[test]
+    fn test_v5_set_inode_blocks_just_over_boundary() {
+        let mut node = make_v5_file_node("over.txt", 513);
+        node.v5_set_inode_blocks();
+        // blocks = div_round_up(513, 512) = 2
+        assert_eq!(node.inode.blocks(), 2);
+    }
+
+    #[test]
+    fn test_v5_set_inode_blocks_v6_inode_noop() {
+        // v5_set_inode_blocks should be a no-op for V6 inodes
+        let mut inode = InodeWrapper::new(RafsVersion::V6);
+        inode.set_mode(libc::S_IFREG as u32 | 0o644);
+        inode.set_size(4096);
+        let info = NodeInfo::default();
+        let mut node = Node::new(inode, info, 0);
+        let blocks_before = node.inode.blocks();
+        node.v5_set_inode_blocks();
+        assert_eq!(node.inode.blocks(), blocks_before);
+    }
+
+    #[test]
+    fn test_v5_set_dir_size_non_dir() {
+        // v5_set_dir_size should be a no-op for non-directory nodes
+        let mut node = make_v5_file_node("file.txt", 100);
+        let original_size = node.inode.size();
+        node.v5_set_dir_size(RafsVersion::V5, &[]);
+        assert_eq!(node.inode.size(), original_size);
+    }
+
+    #[test]
+    fn test_v5_set_dir_size_v6_noop() {
+        // v5_set_dir_size should be a no-op for V6 version
+        let mut node = make_v5_dir_node("dir");
+        let original_size = node.inode.size();
+        node.v5_set_dir_size(RafsVersion::V6, &[]);
+        assert_eq!(node.inode.size(), original_size);
+    }
+
+    #[test]
+    fn test_v5_set_dir_size_empty_dir() {
+        let mut node = make_v5_dir_node("emptydir");
+        node.v5_set_dir_size(RafsVersion::V5, &[]);
+        // Empty directory should get size 4096
+        assert_eq!(node.inode.size(), 4096);
+    }
+
+    #[test]
+    fn test_v5_set_dir_size_with_children() {
+        let mut dir_node = make_v5_dir_node("parent");
+        let child1 = make_v5_file_node("a.txt", 100);
+        let child2 = make_v5_file_node("b.txt", 200);
+        let children = vec![Tree::new(child1), Tree::new(child2)];
+
+        dir_node.v5_set_dir_size(RafsVersion::V5, &children);
+
+        // d_size = sum of (name_size + RAFS_V5_VIRTUAL_ENTRY_SIZE) for each child
+        // child1: name_size("a.txt") = 5, + 8 = 13
+        // child2: name_size("b.txt") = 5, + 8 = 13
+        // total = 26, rounded up to 4k = 4096
+        assert_eq!(dir_node.inode.size(), 4096);
+        // blocks should also be set
+        assert!(dir_node.inode.blocks() > 0);
+    }
+
+    #[test]
+    fn test_v5_set_dir_size_rounds_up() {
+        let mut dir_node = make_v5_dir_node("bigdir");
+
+        // Create enough children so d_size > 4096
+        let mut children = Vec::new();
+        for i in 0..500 {
+            let name = format!("file_{:04}.txt", i);
+            children.push(Tree::new(make_v5_file_node(&name, 100)));
+        }
+
+        dir_node.v5_set_dir_size(RafsVersion::V5, &children);
+        // Size should be rounded up to 4k boundary
+        assert!(dir_node.inode.size() >= 4096);
+        assert_eq!(dir_node.inode.size() % 4096, 0);
+    }
+
+    #[test]
+    fn test_v5_set_inode_blocks_with_xattrs() {
+        let mut inode = InodeWrapper::V5(RafsV5Inode::default());
+        inode.set_mode(libc::S_IFREG as u32 | 0o644);
+        inode.set_size(100);
+        let mut xattrs = RafsXAttrs::new();
+        xattrs.add("user.test".into(), b"value".to_vec()).unwrap();
+        let info = NodeInfo {
+            xattrs,
+            ..NodeInfo::default()
+        };
+        let mut node = Node::new(inode, info, 0);
+        node.v5_set_inode_blocks();
+        // blocks should account for xattr size
+        // blocks = div_round_up(100 + xattr_aligned_size, 512)
+        assert!(node.inode.blocks() >= 1);
+    }
+}

@@ -265,3 +265,112 @@ impl Builder for DirectoryBuilder {
         Ok(output)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_directory_builder_new() {
+        let builder = DirectoryBuilder::new();
+        // Just verifying construction doesn't panic
+        let _ = builder;
+    }
+
+    #[test]
+    fn test_directory_builder_default() {
+        let builder = DirectoryBuilder::default();
+        let _ = builder;
+    }
+
+    #[test]
+    fn test_filesystem_tree_builder_new() {
+        let builder = FilesystemTreeBuilder::new();
+        let _ = builder;
+    }
+
+    #[test]
+    fn test_layer_idx_no_parent() {
+        let bootstrap_mgr = BootstrapManager::new(None, None);
+        let layer_idx = u16::from(bootstrap_mgr.f_parent_path.is_some());
+        assert_eq!(layer_idx, 0);
+    }
+
+    #[test]
+    fn test_layer_idx_with_parent() {
+        let bootstrap_mgr = BootstrapManager::new(None, Some("/some/parent".into()));
+        let layer_idx = u16::from(bootstrap_mgr.f_parent_path.is_some());
+        assert_eq!(layer_idx, 1);
+    }
+
+    #[test]
+    fn test_tree_sorting_by_name() {
+        use crate::core::node::{Node, NodeInfo};
+        use nydus_rafs::metadata::inode::InodeWrapper;
+        use nydus_rafs::metadata::layout::v5::RafsV5Inode;
+        use std::ffi::OsString;
+
+        fn make_node(name: &str) -> Node {
+            let mut inode = InodeWrapper::V5(RafsV5Inode::default());
+            inode.set_mode(libc::S_IFREG as u32 | 0o644);
+            inode.set_name_size(name.len());
+            let info = NodeInfo {
+                target_vec: vec![OsString::from("/"), OsString::from(name)],
+                ..NodeInfo::default()
+            };
+            Node::new(inode, info, 0)
+        }
+
+        // Replicate the sorting done in load_children
+        let mut trees = vec![
+            Tree::new(make_node("zebra")),
+            Tree::new(make_node("apple")),
+            Tree::new(make_node("mango")),
+        ];
+
+        trees.sort_unstable_by(|a, b| a.name().cmp(b.name()));
+
+        assert_eq!(trees[0].name(), b"apple");
+        assert_eq!(trees[1].name(), b"mango");
+        assert_eq!(trees[2].name(), b"zebra");
+    }
+
+    #[test]
+    fn test_tree_sorting_empty() {
+        let mut trees: Vec<Tree> = Vec::new();
+        trees.sort_unstable_by(|a, b| a.name().cmp(b.name()));
+        assert!(trees.is_empty());
+    }
+
+    #[test]
+    fn test_tree_sorting_single_element() {
+        use crate::core::node::{Node, NodeInfo};
+        use nydus_rafs::metadata::inode::InodeWrapper;
+        use nydus_rafs::metadata::layout::v5::RafsV5Inode;
+        use std::ffi::OsString;
+
+        let mut inode = InodeWrapper::V5(RafsV5Inode::default());
+        inode.set_mode(libc::S_IFREG as u32 | 0o644);
+        inode.set_name_size("only".len());
+        let info = NodeInfo {
+            target_vec: vec![OsString::from("/"), OsString::from("only")],
+            ..NodeInfo::default()
+        };
+        let node = Node::new(inode, info, 0);
+
+        let mut trees = vec![Tree::new(node)];
+        trees.sort_unstable_by(|a, b| a.name().cmp(b.name()));
+        assert_eq!(trees.len(), 1);
+        assert_eq!(trees[0].name(), b"only");
+    }
+
+    #[test]
+    fn test_build_tree_with_nonexistent_source() {
+        use std::path::PathBuf;
+        let mut ctx = BuildContext::default();
+        ctx.source_path = PathBuf::from("/nonexistent_directory_12345");
+        let mut builder = DirectoryBuilder::new();
+        let result = builder.build_tree(&mut ctx, 0);
+        assert!(result.is_err());
+    }
+}

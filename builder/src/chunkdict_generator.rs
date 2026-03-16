@@ -281,3 +281,291 @@ impl Generator {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nydus_rafs::metadata::RafsVersion;
+
+    #[test]
+    fn test_chunkdict_chunk_info_derive_traits() {
+        let chunk1 = ChunkdictChunkInfo {
+            image_reference: "ref1".to_string(),
+            version: "v1".to_string(),
+            chunk_blob_id: "blob1".to_string(),
+            chunk_digest: "abcd1234".to_string(),
+            chunk_crc32: 12345,
+            chunk_compressed_size: 1024,
+            chunk_uncompressed_size: 2048,
+            chunk_compressed_offset: 0,
+            chunk_uncompressed_offset: 0,
+        };
+
+        // Test Clone
+        let chunk2 = chunk1.clone();
+        assert_eq!(chunk1, chunk2);
+
+        // Test PartialEq
+        assert_eq!(chunk1, chunk2);
+
+        // Test Debug
+        let debug_str = format!("{:?}", chunk1);
+        assert!(debug_str.contains("ref1"));
+        assert!(debug_str.contains("blob1"));
+    }
+
+    #[test]
+    fn test_chunkdict_chunk_info_hash() {
+        use std::collections::HashSet;
+
+        let chunk1 = ChunkdictChunkInfo {
+            image_reference: "ref1".to_string(),
+            version: "v1".to_string(),
+            chunk_blob_id: "blob1".to_string(),
+            chunk_digest: "digest1".to_string(),
+            chunk_crc32: 100,
+            chunk_compressed_size: 512,
+            chunk_uncompressed_size: 1024,
+            chunk_compressed_offset: 0,
+            chunk_uncompressed_offset: 0,
+        };
+
+        let chunk2 = chunk1.clone();
+        let chunk3 = ChunkdictChunkInfo {
+            image_reference: "ref2".to_string(),
+            ..chunk1.clone()
+        };
+
+        let mut set = HashSet::new();
+        set.insert(chunk1.clone());
+        set.insert(chunk2); // duplicate
+        set.insert(chunk3);
+
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn test_chunkdict_chunk_info_inequality() {
+        let chunk1 = ChunkdictChunkInfo {
+            image_reference: "ref1".to_string(),
+            version: "v1".to_string(),
+            chunk_blob_id: "blob1".to_string(),
+            chunk_digest: "digest1".to_string(),
+            chunk_crc32: 100,
+            chunk_compressed_size: 512,
+            chunk_uncompressed_size: 1024,
+            chunk_compressed_offset: 0,
+            chunk_uncompressed_offset: 0,
+        };
+
+        let chunk2 = ChunkdictChunkInfo {
+            chunk_digest: "different_digest".to_string(),
+            ..chunk1.clone()
+        };
+
+        assert_ne!(chunk1, chunk2);
+    }
+
+    #[test]
+    fn test_chunkdict_blob_info_construction() {
+        let blob = ChunkdictBlobInfo {
+            blob_id: "blob-abc".to_string(),
+            blob_compressed_size: 4096,
+            blob_uncompressed_size: 8192,
+            blob_compressor: "lz4_block".to_string(),
+            blob_meta_ci_compressed_size: 256,
+            blob_meta_ci_uncompressed_size: 512,
+            blob_meta_ci_offset: 1024,
+        };
+
+        assert_eq!(blob.blob_id, "blob-abc");
+        assert_eq!(blob.blob_compressed_size, 4096);
+        assert_eq!(blob.blob_uncompressed_size, 8192);
+        assert_eq!(blob.blob_compressor, "lz4_block");
+        assert_eq!(blob.blob_meta_ci_compressed_size, 256);
+        assert_eq!(blob.blob_meta_ci_uncompressed_size, 512);
+        assert_eq!(blob.blob_meta_ci_offset, 1024);
+    }
+
+    #[test]
+    fn test_build_root_tree_v5() {
+        let mut ctx = BuildContext::default();
+        ctx.fs_version = RafsVersion::V5;
+        let tree = Generator::build_root_tree(&mut ctx).unwrap();
+
+        let node = tree.borrow_mut_node();
+        assert!(node.is_dir());
+        assert_eq!(node.inode.ino(), 1);
+        assert_eq!(node.inode.uid(), 1000);
+        assert_eq!(node.inode.gid(), 1000);
+        assert_eq!(node.inode.nlink(), 3);
+    }
+
+    #[test]
+    fn test_build_root_tree_v6() {
+        let mut ctx = BuildContext::default();
+        ctx.fs_version = RafsVersion::V6;
+        let tree = Generator::build_root_tree(&mut ctx).unwrap();
+
+        let node = tree.borrow_mut_node();
+        assert!(node.is_dir());
+        assert_eq!(node.inode.ino(), 1);
+    }
+
+    #[test]
+    fn test_build_root_tree_has_correct_path() {
+        let mut ctx = BuildContext::default();
+        let tree = Generator::build_root_tree(&mut ctx).unwrap();
+
+        let node = tree.borrow_mut_node();
+        assert_eq!(node.info.path, PathBuf::from("/"));
+        assert_eq!(node.info.target, PathBuf::from("/"));
+    }
+
+    #[test]
+    fn test_build_root_tree_no_children() {
+        let mut ctx = BuildContext::default();
+        let tree = Generator::build_root_tree(&mut ctx).unwrap();
+        assert!(tree.children.is_empty());
+    }
+
+    #[test]
+    fn test_validate_and_remove_chunks_all_valid() {
+        let mut ctx = BuildContext::default();
+        // v6_block_size() returns 4096 by default
+        let mut chunks = vec![
+            ChunkdictChunkInfo {
+                image_reference: "ref".to_string(),
+                version: "v1".to_string(),
+                chunk_blob_id: "blob1".to_string(),
+                chunk_digest: "digest1".to_string(),
+                chunk_crc32: 0,
+                chunk_compressed_size: 4096,
+                chunk_uncompressed_size: 4096,
+                chunk_compressed_offset: 0,
+                chunk_uncompressed_offset: 0,
+            },
+            ChunkdictChunkInfo {
+                image_reference: "ref".to_string(),
+                version: "v1".to_string(),
+                chunk_blob_id: "blob1".to_string(),
+                chunk_digest: "digest2".to_string(),
+                chunk_crc32: 0,
+                chunk_compressed_size: 4096,
+                chunk_uncompressed_size: 4096,
+                chunk_compressed_offset: 4096,
+                chunk_uncompressed_offset: 4096,
+            },
+        ];
+
+        Generator::validate_and_remove_chunks(&mut ctx, &mut chunks);
+        // blob1 total uncompressed = 8192 >= 4096, so all chunks retained
+        assert_eq!(chunks.len(), 2);
+    }
+
+    #[test]
+    fn test_validate_and_remove_chunks_removes_small_blob() {
+        let mut ctx = BuildContext::default();
+        let mut chunks = vec![
+            ChunkdictChunkInfo {
+                image_reference: "ref".to_string(),
+                version: "v1".to_string(),
+                chunk_blob_id: "small_blob".to_string(),
+                chunk_digest: "digest1".to_string(),
+                chunk_crc32: 0,
+                chunk_compressed_size: 100,
+                chunk_uncompressed_size: 100,
+                chunk_compressed_offset: 0,
+                chunk_uncompressed_offset: 0,
+            },
+            ChunkdictChunkInfo {
+                image_reference: "ref".to_string(),
+                version: "v1".to_string(),
+                chunk_blob_id: "big_blob".to_string(),
+                chunk_digest: "digest2".to_string(),
+                chunk_crc32: 0,
+                chunk_compressed_size: 4096,
+                chunk_uncompressed_size: 4096,
+                chunk_compressed_offset: 0,
+                chunk_uncompressed_offset: 0,
+            },
+        ];
+
+        Generator::validate_and_remove_chunks(&mut ctx, &mut chunks);
+        // small_blob total = 100 < 4096, removed
+        // big_blob total = 4096 >= 4096, kept
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].chunk_blob_id, "big_blob");
+    }
+
+    #[test]
+    fn test_validate_and_remove_chunks_empty() {
+        let mut ctx = BuildContext::default();
+        let mut chunks = Vec::new();
+        Generator::validate_and_remove_chunks(&mut ctx, &mut chunks);
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn test_validate_and_remove_chunks_exactly_at_threshold() {
+        let mut ctx = BuildContext::default();
+        let mut chunks = vec![ChunkdictChunkInfo {
+            image_reference: "ref".to_string(),
+            version: "v1".to_string(),
+            chunk_blob_id: "exact_blob".to_string(),
+            chunk_digest: "digest1".to_string(),
+            chunk_crc32: 0,
+            chunk_compressed_size: 4096,
+            chunk_uncompressed_size: 4096,
+            chunk_compressed_offset: 0,
+            chunk_uncompressed_offset: 0,
+        }];
+
+        Generator::validate_and_remove_chunks(&mut ctx, &mut chunks);
+        // 4096 >= 4096, so it's kept
+        assert_eq!(chunks.len(), 1);
+    }
+
+    #[test]
+    fn test_validate_and_remove_chunks_multiple_chunks_same_blob() {
+        let mut ctx = BuildContext::default();
+        // Two small chunks for the same blob, but combined > threshold
+        let mut chunks = vec![
+            ChunkdictChunkInfo {
+                image_reference: "ref".to_string(),
+                version: "v1".to_string(),
+                chunk_blob_id: "combo_blob".to_string(),
+                chunk_digest: "d1".to_string(),
+                chunk_crc32: 0,
+                chunk_compressed_size: 2048,
+                chunk_uncompressed_size: 2048,
+                chunk_compressed_offset: 0,
+                chunk_uncompressed_offset: 0,
+            },
+            ChunkdictChunkInfo {
+                image_reference: "ref".to_string(),
+                version: "v1".to_string(),
+                chunk_blob_id: "combo_blob".to_string(),
+                chunk_digest: "d2".to_string(),
+                chunk_crc32: 0,
+                chunk_compressed_size: 2048,
+                chunk_uncompressed_size: 2048,
+                chunk_compressed_offset: 2048,
+                chunk_uncompressed_offset: 2048,
+            },
+        ];
+
+        Generator::validate_and_remove_chunks(&mut ctx, &mut chunks);
+        // combo_blob total = 4096 >= 4096, both chunks kept
+        assert_eq!(chunks.len(), 2);
+    }
+
+    #[test]
+    fn test_validate_tree_empty_tree() {
+        let mut ctx = BuildContext::default();
+        let tree = Generator::build_root_tree(&mut ctx).unwrap();
+        // validate_tree just walks and logs, should not fail
+        let result = Generator::validate_tree(&tree);
+        assert!(result.is_ok());
+    }
+}

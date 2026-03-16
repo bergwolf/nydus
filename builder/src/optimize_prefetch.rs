@@ -450,3 +450,327 @@ fn range_overlap(chunk: &mut NodeChunk, range: &PrefetchFileRange) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::node::ChunkSource;
+    use nydus_rafs::metadata::chunk::ChunkWrapper;
+    use nydus_rafs::metadata::RafsVersion;
+    use std::sync::Arc;
+
+    fn make_chunk(file_offset: u64, uncompressed_size: u32) -> NodeChunk {
+        let mut chunk = ChunkWrapper::new(RafsVersion::V5);
+        chunk.set_file_offset(file_offset);
+        chunk.set_uncompressed_size(uncompressed_size);
+        chunk.set_compressed_size(uncompressed_size);
+        NodeChunk {
+            source: ChunkSource::Build,
+            inner: Arc::new(chunk),
+        }
+    }
+
+    #[test]
+    fn test_range_overlap_full_overlap() {
+        let mut chunk = make_chunk(0, 1024);
+        let range = PrefetchFileRange {
+            offset: 0,
+            size: 2048,
+        };
+        assert!(range_overlap(&mut chunk, &range));
+    }
+
+    #[test]
+    fn test_range_overlap_no_overlap() {
+        let mut chunk = make_chunk(2048, 1024);
+        let range = PrefetchFileRange {
+            offset: 0,
+            size: 1024,
+        };
+        assert!(!range_overlap(&mut chunk, &range));
+    }
+
+    #[test]
+    fn test_range_overlap_partial_start() {
+        let mut chunk = make_chunk(512, 1024);
+        let range = PrefetchFileRange {
+            offset: 0,
+            size: 1024,
+        };
+        assert!(range_overlap(&mut chunk, &range));
+    }
+
+    #[test]
+    fn test_range_overlap_partial_end() {
+        let mut chunk = make_chunk(0, 1024);
+        let range = PrefetchFileRange {
+            offset: 512,
+            size: 1024,
+        };
+        assert!(range_overlap(&mut chunk, &range));
+    }
+
+    #[test]
+    fn test_range_overlap_exact_match() {
+        let mut chunk = make_chunk(100, 500);
+        let range = PrefetchFileRange {
+            offset: 100,
+            size: 500,
+        };
+        assert!(range_overlap(&mut chunk, &range));
+    }
+
+    #[test]
+    fn test_range_overlap_adjacent_no_gap() {
+        // chunk ends at 1024, range starts at 1024
+        let mut chunk = make_chunk(0, 1024);
+        let range = PrefetchFileRange {
+            offset: 1024,
+            size: 1024,
+        };
+        // max(1024, 0) = 1024, min(2048, 1024) = 1024, 1024 <= 1024 -> true
+        assert!(range_overlap(&mut chunk, &range));
+    }
+
+    #[test]
+    fn test_range_overlap_chunk_inside_range() {
+        let mut chunk = make_chunk(100, 50);
+        let range = PrefetchFileRange {
+            offset: 0,
+            size: 1000,
+        };
+        assert!(range_overlap(&mut chunk, &range));
+    }
+
+    #[test]
+    fn test_range_overlap_range_inside_chunk() {
+        let mut chunk = make_chunk(0, 2048);
+        let range = PrefetchFileRange {
+            offset: 512,
+            size: 512,
+        };
+        assert!(range_overlap(&mut chunk, &range));
+    }
+
+    #[test]
+    fn test_range_overlap_zero_size_range() {
+        let mut chunk = make_chunk(0, 1024);
+        let range = PrefetchFileRange {
+            offset: 512,
+            size: 0,
+        };
+        // max(512, 0) = 512, min(512, 1024) = 512, 512 <= 512 -> true
+        assert!(range_overlap(&mut chunk, &range));
+    }
+
+    #[test]
+    fn test_generate_prefetch_file_info_empty_content() {
+        let tmpdir = vmm_sys_util::tempdir::TempDir::new().unwrap();
+        let file_path = tmpdir.as_path().join("empty.json");
+        std::fs::write(&file_path, "   ").unwrap();
+        let result = generate_prefetch_file_info(&file_path).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_generate_prefetch_file_info_valid_v1() {
+        let tmpdir = vmm_sys_util::tempdir::TempDir::new().unwrap();
+        let file_path = tmpdir.as_path().join("prefetch.json");
+        let json = r#"{
+            "version": "v1",
+            "files": [
+                {"path": "/usr/bin/test"},
+                {"path": "/etc/config.json", "ranges": [[0, 1024], [4096, 2048]]}
+            ]
+        }"#;
+        std::fs::write(&file_path, json).unwrap();
+        let result = generate_prefetch_file_info(&file_path).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].path, PathBuf::from("/usr/bin/test"));
+        assert!(result[0].ranges.is_none());
+        assert_eq!(result[1].path, PathBuf::from("/etc/config.json"));
+        let ranges = result[1].ranges.as_ref().unwrap();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].offset, 0);
+        assert_eq!(ranges[0].size, 1024);
+        assert_eq!(ranges[1].offset, 4096);
+        assert_eq!(ranges[1].size, 2048);
+    }
+
+    #[test]
+    fn test_generate_prefetch_file_info_unsupported_version() {
+        let tmpdir = vmm_sys_util::tempdir::TempDir::new().unwrap();
+        let file_path = tmpdir.as_path().join("bad_version.json");
+        let json = r#"{"version": "v2", "files": []}"#;
+        std::fs::write(&file_path, json).unwrap();
+        let result = generate_prefetch_file_info(&file_path);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.err().unwrap());
+        assert!(err_msg.contains("unsupported prefetch file version"));
+    }
+
+    #[test]
+    fn test_generate_prefetch_file_info_invalid_json() {
+        let tmpdir = vmm_sys_util::tempdir::TempDir::new().unwrap();
+        let file_path = tmpdir.as_path().join("invalid.json");
+        std::fs::write(&file_path, "not valid json{").unwrap();
+        let result = generate_prefetch_file_info(&file_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generate_prefetch_file_info_relative_path_skipped() {
+        let tmpdir = vmm_sys_util::tempdir::TempDir::new().unwrap();
+        let file_path = tmpdir.as_path().join("relative.json");
+        let json = r#"{
+            "version": "v1",
+            "files": [
+                {"path": "relative/path/file"},
+                {"path": "/absolute/path/file"}
+            ]
+        }"#;
+        std::fs::write(&file_path, json).unwrap();
+        let result = generate_prefetch_file_info(&file_path).unwrap();
+        // Relative path should be skipped
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].path, PathBuf::from("/absolute/path/file"));
+    }
+
+    #[test]
+    fn test_generate_prefetch_file_info_nonexistent_file() {
+        let result = generate_prefetch_file_info(Path::new("/nonexistent/file.json"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generate_prefetch_file_info_no_files() {
+        let tmpdir = vmm_sys_util::tempdir::TempDir::new().unwrap();
+        let file_path = tmpdir.as_path().join("nofiles.json");
+        let json = r#"{"version": "v1", "files": []}"#;
+        std::fs::write(&file_path, json).unwrap();
+        let result = generate_prefetch_file_info(&file_path).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_generate_prefetch_file_info_no_ranges() {
+        let tmpdir = vmm_sys_util::tempdir::TempDir::new().unwrap();
+        let file_path = tmpdir.as_path().join("noranges.json");
+        let json = r#"{
+            "version": "v1",
+            "files": [{"path": "/usr/lib/libfoo.so"}]
+        }"#;
+        std::fs::write(&file_path, json).unwrap();
+        let result = generate_prefetch_file_info(&file_path).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].ranges.is_none());
+    }
+
+    #[test]
+    fn test_rewrite_blob_id_single_match() {
+        let info = BlobInfo::new(
+            0,
+            String::from("old-id"),
+            0,
+            0,
+            1024 * 1024,
+            u32::MAX,
+            nydus_storage::device::BlobFeatures::empty(),
+        );
+        let mut entries: Vec<Arc<BlobInfo>> = vec![Arc::new(info)];
+        rewrite_blob_id(&mut entries, "old-id", String::from("new-id"));
+        assert_eq!(entries[0].blob_id(), "new-id");
+    }
+
+    #[test]
+    fn test_rewrite_blob_id_no_match() {
+        let info = BlobInfo::new(
+            0,
+            String::from("some-id"),
+            0,
+            0,
+            1024 * 1024,
+            u32::MAX,
+            nydus_storage::device::BlobFeatures::empty(),
+        );
+        let mut entries: Vec<Arc<BlobInfo>> = vec![Arc::new(info)];
+        rewrite_blob_id(&mut entries, "nonexistent", String::from("new-id"));
+        assert_eq!(entries[0].blob_id(), "some-id");
+    }
+
+    #[test]
+    fn test_rewrite_blob_id_multiple_entries() {
+        let info1 = BlobInfo::new(
+            0,
+            String::from("keep-me"),
+            0,
+            0,
+            1024 * 1024,
+            u32::MAX,
+            nydus_storage::device::BlobFeatures::empty(),
+        );
+        let info2 = BlobInfo::new(
+            1,
+            String::from("replace-me"),
+            0,
+            0,
+            1024 * 1024,
+            u32::MAX,
+            nydus_storage::device::BlobFeatures::empty(),
+        );
+        let mut entries: Vec<Arc<BlobInfo>> = vec![Arc::new(info1), Arc::new(info2)];
+        rewrite_blob_id(&mut entries, "replace-me", String::from("replaced"));
+        assert_eq!(entries[0].blob_id(), "keep-me");
+        assert_eq!(entries[1].blob_id(), "replaced");
+    }
+
+    #[test]
+    fn test_rewrite_blob_id_empty_entries() {
+        let mut entries: Vec<Arc<BlobInfo>> = vec![];
+        rewrite_blob_id(&mut entries, "any", String::from("new"));
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_prefetch_file_range_construction() {
+        let range = PrefetchFileRange {
+            offset: 4096,
+            size: 8192,
+        };
+        assert_eq!(range.offset, 4096);
+        assert_eq!(range.size, 8192);
+    }
+
+    #[test]
+    fn test_prefetch_file_info_construction() {
+        let info = PrefetchFileInfo {
+            path: PathBuf::from("/test/file"),
+            ranges: Some(vec![PrefetchFileRange {
+                offset: 0,
+                size: 1024,
+            }]),
+        };
+        assert_eq!(info.path, PathBuf::from("/test/file"));
+        assert_eq!(info.ranges.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_prefetch_file_info_clone() {
+        let info = PrefetchFileInfo {
+            path: PathBuf::from("/clone/test"),
+            ranges: Some(vec![
+                PrefetchFileRange {
+                    offset: 0,
+                    size: 100,
+                },
+                PrefetchFileRange {
+                    offset: 200,
+                    size: 300,
+                },
+            ]),
+        };
+        let cloned = info.clone();
+        assert_eq!(cloned.path, info.path);
+        assert_eq!(cloned.ranges.as_ref().unwrap().len(), 2);
+    }
+}

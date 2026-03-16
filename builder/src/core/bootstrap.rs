@@ -212,3 +212,166 @@ impl Bootstrap {
             .context("failed to build tree from bootstrap")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::node::{Node, NodeInfo};
+    use nydus_rafs::metadata::inode::InodeWrapper;
+    use nydus_rafs::metadata::layout::v5::RafsV5Inode;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    fn make_dir_node(name: &str) -> Node {
+        let mut inode = InodeWrapper::V5(RafsV5Inode::default());
+        inode.set_mode(libc::S_IFDIR as u32 | 0o755);
+        inode.set_name_size(name.len());
+        let info = NodeInfo {
+            explicit_uidgid: true,
+            src_dev: 0,
+            src_ino: 0,
+            rdev: 0,
+            source: PathBuf::from("/"),
+            path: PathBuf::from("/").join(name),
+            target: PathBuf::from("/").join(name),
+            target_vec: vec![OsString::from("/"), OsString::from(name)],
+            symlink: None,
+            xattrs: Default::default(),
+            v6_force_extended_inode: false,
+        };
+        Node::new(inode, info, 0)
+    }
+
+    fn make_file_node(name: &str, src_ino: u64) -> Node {
+        let mut inode = InodeWrapper::V5(RafsV5Inode::default());
+        inode.set_mode(libc::S_IFREG as u32 | 0o644);
+        inode.set_name_size(name.len());
+        inode.set_size(1024);
+        let info = NodeInfo {
+            explicit_uidgid: true,
+            src_dev: 0,
+            src_ino,
+            rdev: 0,
+            source: PathBuf::from("/"),
+            path: PathBuf::from("/").join(name),
+            target: PathBuf::from("/").join(name),
+            target_vec: vec![OsString::from("/"), OsString::from(name)],
+            symlink: None,
+            xattrs: Default::default(),
+            v6_force_extended_inode: false,
+        };
+        Node::new(inode, info, 0)
+    }
+
+    fn make_root_node() -> Node {
+        let mut inode = InodeWrapper::V5(RafsV5Inode::default());
+        inode.set_mode(libc::S_IFDIR as u32 | 0o755);
+        inode.set_name_size("/".len());
+        let info = NodeInfo {
+            explicit_uidgid: true,
+            src_dev: 0,
+            src_ino: 0,
+            rdev: 0,
+            source: PathBuf::from("/"),
+            path: PathBuf::from("/"),
+            target: PathBuf::from("/"),
+            target_vec: vec![OsString::from("/")],
+            symlink: None,
+            xattrs: Default::default(),
+            v6_force_extended_inode: false,
+        };
+        Node::new(inode, info, 0)
+    }
+
+    #[test]
+    fn test_bootstrap_new() {
+        let root = make_root_node();
+        let tree = Tree::new(root);
+        let bootstrap = Bootstrap::new(tree);
+        assert!(bootstrap.is_ok());
+        let bootstrap = bootstrap.unwrap();
+        assert!(bootstrap.tree.children.is_empty());
+    }
+
+    #[test]
+    fn test_bootstrap_new_with_children() {
+        let root = make_root_node();
+        let mut tree = Tree::new(root);
+
+        let child1 = make_file_node("file1.txt", 100);
+        let child2 = make_dir_node("subdir");
+        tree.children.push(Tree::new(child1));
+        tree.children.push(Tree::new(child2));
+
+        let bootstrap = Bootstrap::new(tree).unwrap();
+        assert_eq!(bootstrap.tree.children.len(), 2);
+    }
+
+    #[test]
+    fn test_bootstrap_tree_structure_preserved() {
+        let root = make_root_node();
+        let mut tree = Tree::new(root);
+
+        let child = make_file_node("test.txt", 42);
+        tree.children.push(Tree::new(child));
+
+        let bootstrap = Bootstrap::new(tree).unwrap();
+        let child_node = bootstrap.tree.children[0].borrow_mut_node();
+        assert!(child_node.is_reg());
+        assert_eq!(child_node.inode.size(), 1024);
+    }
+
+    #[test]
+    fn test_bootstrap_root_is_dir() {
+        let root = make_root_node();
+        let tree = Tree::new(root);
+        let bootstrap = Bootstrap::new(tree).unwrap();
+        assert!(bootstrap.tree.borrow_mut_node().is_dir());
+    }
+
+    #[test]
+    fn test_bootstrap_nested_tree() {
+        let root = make_root_node();
+        let mut tree = Tree::new(root);
+
+        let subdir = make_dir_node("subdir");
+        let mut subdir_tree = Tree::new(subdir);
+
+        let file = make_file_node("nested.txt", 200);
+        subdir_tree.children.push(Tree::new(file));
+
+        tree.children.push(subdir_tree);
+
+        let bootstrap = Bootstrap::new(tree).unwrap();
+        assert_eq!(bootstrap.tree.children.len(), 1);
+        assert_eq!(bootstrap.tree.children[0].children.len(), 1);
+        assert!(bootstrap.tree.children[0].children[0]
+            .borrow_mut_node()
+            .is_reg());
+    }
+
+    #[test]
+    fn test_bootstrap_load_parent_no_parent_path() {
+        let mut ctx = BuildContext::default();
+        let mut bootstrap_mgr = BootstrapManager::new(None, None);
+        let mut blob_mgr = BlobManager::new(nydus_utils::digest::Algorithm::Sha256, false);
+
+        let result =
+            Bootstrap::load_parent_bootstrap(&mut ctx, &mut bootstrap_mgr, &mut blob_mgr);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.err().unwrap());
+        assert!(err_msg.contains("parent bootstrap is null"));
+    }
+
+    #[test]
+    fn test_bootstrap_load_parent_invalid_path() {
+        let mut ctx = BuildContext::default();
+        let mut bootstrap_mgr =
+            BootstrapManager::new(None, Some("/nonexistent/path/bootstrap".into()));
+        let mut blob_mgr = BlobManager::new(nydus_utils::digest::Algorithm::Sha256, false);
+
+        let result =
+            Bootstrap::load_parent_bootstrap(&mut ctx, &mut bootstrap_mgr, &mut blob_mgr);
+        assert!(result.is_err());
+    }
+}
