@@ -7,9 +7,15 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/require"
 )
 
@@ -211,4 +217,208 @@ func TestS3RemoteIDPaths(t *testing.T) {
 			require.Contains(t, id, tt.expectedSuffix)
 		})
 	}
+}
+
+func testS3BackendWithServer(t *testing.T, handler http.HandlerFunc) (*S3Backend, *httptest.Server) {
+	t.Helper()
+	ts := httptest.NewServer(handler)
+
+	endpointURL := ts.URL
+	cfg, err := awscfg.LoadDefaultConfig(context.TODO(),
+		awscfg.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+		awscfg.WithRegion("us-east-1"),
+		awscfg.WithRetryMaxAttempts(1),
+	)
+	require.NoError(t, err)
+
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(endpointURL)
+		o.Region = "us-east-1"
+		o.UsePathStyle = true
+	})
+
+	return &S3Backend{
+		objectPrefix:       "",
+		bucketName:         "test-bucket",
+		endpointWithScheme: endpointURL,
+		client:             client,
+	}, ts
+}
+
+func TestS3ExistObjectFound(t *testing.T) {
+	b, ts := testS3BackendWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	exists, err := b.existObject(context.Background(), "test-key")
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
+func TestS3ExistObjectNotFound(t *testing.T) {
+	b, ts := testS3BackendWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer ts.Close()
+
+	exists, err := b.existObject(context.Background(), "test-key")
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+func TestS3ExistObjectServerError(t *testing.T) {
+	b, ts := testS3BackendWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+	defer ts.Close()
+
+	exists, err := b.existObject(context.Background(), "test-key")
+	require.Error(t, err)
+	require.False(t, exists)
+}
+
+func TestS3CheckFound(t *testing.T) {
+	b, ts := testS3BackendWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "HEAD" {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	defer ts.Close()
+
+	exists, err := b.Check("test-blob")
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
+func TestS3CheckNotFound(t *testing.T) {
+	b, ts := testS3BackendWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "HEAD" {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	defer ts.Close()
+
+	exists, err := b.Check("test-blob")
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+func TestS3UploadSkipExisting(t *testing.T) {
+	b, ts := testS3BackendWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "HEAD" {
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	defer ts.Close()
+
+	blobID := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	desc, err := b.Upload(context.Background(), blobID, "/nonexistent", 100, false)
+	require.NoError(t, err)
+	require.NotNil(t, desc)
+	require.Equal(t, int64(100), desc.Size)
+	require.Len(t, desc.URLs, 1)
+}
+
+func TestS3UploadFileOpenError(t *testing.T) {
+	b, ts := testS3BackendWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "HEAD" {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	defer ts.Close()
+
+	blobID := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	_, err := b.Upload(context.Background(), blobID, "/nonexistent/path/blob", 100, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "open blob file")
+}
+
+func TestS3UploadExistenceCheckError(t *testing.T) {
+	b, ts := testS3BackendWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "HEAD" {
+			w.WriteHeader(http.StatusForbidden)
+		}
+	})
+	defer ts.Close()
+
+	blobID := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	_, err := b.Upload(context.Background(), blobID, "/nonexistent", 100, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "check object existence")
+}
+
+func TestS3ReaderSuccess(t *testing.T) {
+	b, ts := testS3BackendWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "11")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("hello world"))
+	})
+	defer ts.Close()
+
+	rc, err := b.Reader("test-blob")
+	require.NoError(t, err)
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	require.Equal(t, "hello world", string(data))
+}
+
+func TestS3RangeReaderRead(t *testing.T) {
+	b, ts := testS3BackendWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Range", "bytes 0-4/11")
+		w.Header().Set("Content-Length", "5")
+		w.WriteHeader(http.StatusPartialContent)
+		w.Write([]byte("hello"))
+	})
+	defer ts.Close()
+
+	rr, err := b.RangeReader("test-blob")
+	require.NoError(t, err)
+
+	rc, err := rr.Reader(0, 5)
+	require.NoError(t, err)
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	require.Equal(t, "hello", string(data))
+}
+
+func TestS3SizeError(t *testing.T) {
+	b, ts := testS3BackendWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer ts.Close()
+
+	_, err := b.Size("test-blob")
+	require.Error(t, err)
+}
+
+func TestS3FinalizeWithBool(t *testing.T) {
+	b := &S3Backend{}
+	require.NoError(t, b.Finalize(true))
+	require.NoError(t, b.Finalize(false))
+}
+
+func TestS3TypeConsistency(t *testing.T) {
+	b := tempS3Backend()
+	for i := 0; i < 3; i++ {
+		require.Equal(t, S3backend, b.Type())
+	}
+}
+
+func TestS3BlobObjectKeyEmpty(t *testing.T) {
+	b := &S3Backend{objectPrefix: ""}
+	require.Equal(t, "blobid", b.blobObjectKey("blobid"))
+}
+
+func TestS3RemoteIDWithCustomEndpoint(t *testing.T) {
+	b := &S3Backend{
+		endpointWithScheme: "http://minio:9000",
+		bucketName:         "test",
+	}
+	id := b.remoteID("prefix/blobid")
+	require.Equal(t, "http://minio:9000/test/prefix/blobid", id)
 }

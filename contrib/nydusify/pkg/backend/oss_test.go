@@ -178,3 +178,93 @@ func TestOSSBackendNoCredentials(t *testing.T) {
 	require.NotNil(t, b)
 	require.Equal(t, "", b.objectPrefix)
 }
+
+func TestCalcCrc64ECMAEmptyFile(t *testing.T) {
+	file, err := os.CreateTemp("", "empty")
+	require.NoError(t, err)
+	defer os.Remove(file.Name())
+	file.Close()
+
+	crc, err := calcCrc64ECMA(file.Name())
+	require.NoError(t, err)
+	// CRC64 of empty data
+	require.Equal(t, crc64.Checksum([]byte{}, crc64.MakeTable(crc64.ECMA)), crc)
+}
+
+func TestCalcCrc64ECMALargeFile(t *testing.T) {
+	file, err := os.CreateTemp("", "large")
+	require.NoError(t, err)
+	defer os.Remove(file.Name())
+
+	// Write more than 4KB to exercise the read loop
+	data := make([]byte, 8192)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+	_, err = file.Write(data)
+	require.NoError(t, err)
+	file.Close()
+
+	crc, err := calcCrc64ECMA(file.Name())
+	require.NoError(t, err)
+	expected := crc64.Checksum(data, crc64.MakeTable(crc64.ECMA))
+	require.Equal(t, expected, crc)
+}
+
+func TestCalcCrc64ECMAExactBufferSize(t *testing.T) {
+	file, err := os.CreateTemp("", "exact")
+	require.NoError(t, err)
+	defer os.Remove(file.Name())
+
+	// Write exactly 4KB (the buffer size)
+	data := make([]byte, 4*1024)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+	_, err = file.Write(data)
+	require.NoError(t, err)
+	file.Close()
+
+	crc, err := calcCrc64ECMA(file.Name())
+	require.NoError(t, err)
+	expected := crc64.Checksum(data, crc64.MakeTable(crc64.ECMA))
+	require.Equal(t, expected, crc)
+}
+
+func TestOSSBackendTypeConsistency(t *testing.T) {
+	b := &OSSBackend{}
+	for i := 0; i < 3; i++ {
+		require.Equal(t, OssBackend, b.Type())
+	}
+}
+
+func TestOSSRemoteIDVariousBlobs(t *testing.T) {
+	tests := []struct {
+		name     string
+		prefix   string
+		blobID   string
+		expected string
+	}{
+		{"empty blob", "prefix/", "", "oss://test/prefix/"},
+		{"long blob", "", "abcdef0123456789abcdef0123456789", "oss://test/abcdef0123456789abcdef0123456789"},
+		{"special chars", "path/to/", "blob-with-dashes", "oss://test/path/to/blob-with-dashes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &OSSBackend{
+				objectPrefix: tt.prefix,
+				bucket:       tempOSSBackend().bucket,
+			}
+			require.Equal(t, tt.expected, b.remoteID(tt.blobID))
+		})
+	}
+}
+
+func TestNewOSSBackendAllOptionalFieldsEmpty(t *testing.T) {
+	cfg := `{"bucket_name": "test-bucket", "endpoint": "oss-cn-hangzhou.aliyuncs.com"}`
+	b, err := newOSSBackend([]byte(cfg))
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	require.Equal(t, "", b.objectPrefix)
+	require.Equal(t, "test-bucket", b.bucket.BucketName)
+}

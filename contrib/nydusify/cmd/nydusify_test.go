@@ -484,3 +484,389 @@ func TestValidateSourceAndTargetArchives(t *testing.T) {
 		})
 	}
 }
+
+func TestIsPossibleValueEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		list     []string
+		value    string
+		expected bool
+	}{
+		{"empty list", []string{}, "value", false},
+		{"empty value", []string{"a", "b"}, "", false},
+		{"empty both", []string{}, "", false},
+		{"single item match", []string{"only"}, "only", true},
+		{"single item no match", []string{"only"}, "other", false},
+		{"first item", []string{"a", "b", "c"}, "a", true},
+		{"last item", []string{"a", "b", "c"}, "c", true},
+		{"case sensitive", []string{"ABC"}, "abc", false},
+		{"whitespace", []string{" a "}, " a ", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, isPossibleValue(tt.list, tt.value))
+		})
+	}
+}
+
+func TestAddReferenceSuffixEdgeCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		source      string
+		suffix      string
+		expected    string
+		expectError bool
+	}{
+		{
+			name:     "empty suffix",
+			source:   "localhost:5000/nginx:latest",
+			suffix:   "",
+			expected: "localhost:5000/nginx:latest",
+		},
+		{
+			name:     "long suffix",
+			source:   "localhost:5000/nginx:latest",
+			suffix:   "-nydus-v2-optimized",
+			expected: "localhost:5000/nginx:latest-nydus-v2-optimized",
+		},
+		{
+			name:     "docker hub reference",
+			source:   "library/alpine:3.18",
+			suffix:   "-nydus",
+			expected: "docker.io/library/alpine:3.18-nydus",
+		},
+		{
+			name:     "no tag defaults to latest",
+			source:   "myregistry.io/myrepo",
+			suffix:   "-converted",
+			expected: "myregistry.io/myrepo:latest-converted",
+		},
+		{
+			name:        "digest reference not supported",
+			source:      "nginx@sha256:757574c5a2102627de54971a0083d4ecd24eb48fdf06b234d063f19f7bbc22fb",
+			suffix:      "-nydus",
+			expectError: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := addReferenceSuffix(tt.source, tt.suffix)
+			if tt.expectError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestParseBackendConfigBothEmpty(t *testing.T) {
+	result, err := parseBackendConfig("", "")
+	require.NoError(t, err)
+	require.Empty(t, result)
+}
+
+func TestParseBackendConfigInlineJSON(t *testing.T) {
+	configJSON := `{"key": "value"}`
+	result, err := parseBackendConfig(configJSON, "")
+	require.NoError(t, err)
+	require.Equal(t, configJSON, result)
+}
+
+func TestSetupLogLevelDebugFlag(t *testing.T) {
+	originalLevel := logrus.GetLevel()
+	originalOutput := logrus.StandardLogger().Out
+	defer func() {
+		logrus.SetLevel(originalLevel)
+		logrus.SetOutput(originalOutput)
+	}()
+
+	app := &cli.App{
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "D", Value: false},
+			&cli.StringFlag{Name: "log-level", Value: "info"},
+			&cli.StringFlag{Name: "log-file", Value: ""},
+		},
+	}
+
+	flagSet := flag.NewFlagSet("debug-test", flag.PanicOnError)
+	flagSet.Bool("D", true, "")
+	ctx := cli.NewContext(app, flagSet, nil)
+
+	setupLogLevel(ctx)
+	require.Equal(t, logrus.DebugLevel, logrus.GetLevel())
+}
+
+func TestSetupLogLevelInvalidLevel(t *testing.T) {
+	originalLevel := logrus.GetLevel()
+	originalOutput := logrus.StandardLogger().Out
+	defer func() {
+		logrus.SetLevel(originalLevel)
+		logrus.SetOutput(originalOutput)
+	}()
+
+	app := &cli.App{
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "D", Value: false},
+			&cli.StringFlag{Name: "log-level", Value: "info"},
+			&cli.StringFlag{Name: "log-file", Value: ""},
+		},
+	}
+
+	flagSet := flag.NewFlagSet("invalid-level-test", flag.PanicOnError)
+	flagSet.String("log-level", "not-a-valid-level", "")
+	ctx := cli.NewContext(app, flagSet, nil)
+
+	setupLogLevel(ctx)
+	// Should fall back to default log level (info)
+	require.Equal(t, defaultLogLevel, logrus.GetLevel())
+}
+
+func TestSetupLogLevelValidLevels(t *testing.T) {
+	originalLevel := logrus.GetLevel()
+	originalOutput := logrus.StandardLogger().Out
+	defer func() {
+		logrus.SetLevel(originalLevel)
+		logrus.SetOutput(originalOutput)
+	}()
+
+	levels := []struct {
+		name  string
+		level logrus.Level
+	}{
+		{"debug", logrus.DebugLevel},
+		{"warn", logrus.WarnLevel},
+		{"error", logrus.ErrorLevel},
+		{"trace", logrus.TraceLevel},
+	}
+
+	for _, tt := range levels {
+		t.Run(tt.name, func(t *testing.T) {
+			app := &cli.App{
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "D", Value: false},
+					&cli.StringFlag{Name: "log-level", Value: "info"},
+					&cli.StringFlag{Name: "log-file", Value: ""},
+				},
+			}
+
+			flagSet := flag.NewFlagSet("level-test-"+tt.name, flag.PanicOnError)
+			flagSet.String("log-level", tt.name, "")
+			ctx := cli.NewContext(app, flagSet, nil)
+
+			setupLogLevel(ctx)
+			require.Equal(t, tt.level, logrus.GetLevel())
+		})
+	}
+}
+
+func TestGetGlobalFlagNames(t *testing.T) {
+	flags := getGlobalFlags()
+	require.Equal(t, 3, len(flags))
+
+	flagNames := make(map[string]bool)
+	for _, f := range flags {
+		for _, name := range f.Names() {
+			flagNames[name] = true
+		}
+	}
+
+	require.True(t, flagNames["debug"])
+	require.True(t, flagNames["D"])
+	require.True(t, flagNames["log-level"])
+	require.True(t, flagNames["l"])
+	require.True(t, flagNames["log-file"])
+}
+
+func TestGetCacheReferenceDirectCache(t *testing.T) {
+	app := &cli.App{
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "build-cache", Value: ""},
+			&cli.StringFlag{Name: "build-cache-tag", Value: ""},
+		},
+	}
+
+	flagSet := flag.NewFlagSet("cache-test", flag.PanicOnError)
+	flagSet.String("build-cache", "localhost:5000/cache:v1", "")
+	ctx := cli.NewContext(app, flagSet, nil)
+
+	cache, err := getCacheReference(ctx, "localhost:5000/nginx:latest")
+	require.NoError(t, err)
+	require.Equal(t, "localhost:5000/cache:v1", cache)
+}
+
+func TestGetBackendConfigS3Type(t *testing.T) {
+	configJSON := `{"bucket_name": "test", "region": "us-east-1"}`
+
+	app := &cli.App{
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "prefixbackend-type", Value: ""},
+			&cli.StringFlag{Name: "prefixbackend-config", Value: ""},
+			&cli.StringFlag{Name: "prefixbackend-config-file", Value: ""},
+		},
+	}
+
+	flagSet := flag.NewFlagSet("s3-config-test", flag.PanicOnError)
+	flagSet.String("prefixbackend-type", "s3", "")
+	flagSet.String("prefixbackend-config", configJSON, "")
+	ctx := cli.NewContext(app, flagSet, nil)
+
+	bt, bc, err := getBackendConfig(ctx, "prefix", true)
+	require.NoError(t, err)
+	require.Equal(t, "s3", bt)
+	require.Equal(t, configJSON, bc)
+}
+
+func TestMaxCacheMaxRecordsValue(t *testing.T) {
+	require.Equal(t, uint(200), maxCacheMaxRecords)
+}
+
+func TestDefaultLogLevel(t *testing.T) {
+	require.Equal(t, logrus.InfoLevel, defaultLogLevel)
+}
+
+func TestTryReverseConvert(t *testing.T) {
+	app := &cli.App{
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "work-dir", Value: "./tmp"},
+			&cli.StringFlag{Name: "nydus-image", Value: "nydus-image"},
+			&cli.StringFlag{Name: "source", Value: ""},
+			&cli.BoolFlag{Name: "source-insecure", Value: false},
+			&cli.BoolFlag{Name: "target-insecure", Value: false},
+			&cli.BoolFlag{Name: "all-platforms", Value: false},
+			&cli.StringFlag{Name: "platform", Value: "linux/amd64"},
+			&cli.StringFlag{Name: "output-json", Value: ""},
+			&cli.IntFlag{Name: "push-retry-count", Value: 3},
+			&cli.StringFlag{Name: "push-retry-delay", Value: "5s"},
+			&cli.BoolFlag{Name: "plain-http", Value: false},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	flagSet := flag.NewFlagSet("reverse-test", flag.PanicOnError)
+	flagSet.String("work-dir", tmpDir, "")
+	flagSet.String("nydus-image", "nydus-image", "")
+	flagSet.String("source", "localhost:1/source:latest", "")
+	flagSet.Bool("source-insecure", false, "")
+	flagSet.Bool("target-insecure", false, "")
+	flagSet.Bool("all-platforms", false, "")
+	flagSet.String("platform", "linux/amd64", "")
+	flagSet.String("output-json", "", "")
+	flagSet.Int("push-retry-count", 1, "")
+	flagSet.String("push-retry-delay", "1s", "")
+	flagSet.Bool("plain-http", true, "")
+	ctx := cli.NewContext(app, flagSet, nil)
+
+	converted, err := tryReverseConvert(ctx, "localhost:1/target:latest")
+	require.True(t, converted)
+	// ReverseConvert will fail because the source registry is unreachable
+	require.Error(t, err)
+}
+
+func TestGetPrefetchPatternsStdinError(t *testing.T) {
+	oldStdin := os.Stdin
+	defer func() { os.Stdin = oldStdin }()
+
+	// Create a pipe and close the read end to simulate broken stdin
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	w.Close()
+	r.Close()
+	os.Stdin = r
+
+	app := &cli.App{
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "prefetch-dir", Value: ""},
+			&cli.BoolFlag{Name: "prefetch-patterns", Value: false},
+		},
+	}
+	flagSet := flag.NewFlagSet("stdin-error", flag.PanicOnError)
+	flagSet.Bool("prefetch-patterns", true, "")
+	ctx := cli.NewContext(app, flagSet, nil)
+
+	_, err = getPrefetchPatterns(ctx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "read prefetch patterns from STDIN")
+}
+
+func TestGetPrefetchPatternsStdinData(t *testing.T) {
+	oldStdin := os.Stdin
+	defer func() { os.Stdin = oldStdin }()
+
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdin = r
+
+	go func() {
+		w.WriteString("/etc\n/bin\n")
+		w.Close()
+	}()
+
+	app := &cli.App{
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "prefetch-dir", Value: ""},
+			&cli.BoolFlag{Name: "prefetch-patterns", Value: false},
+		},
+	}
+	flagSet := flag.NewFlagSet("stdin-data", flag.PanicOnError)
+	flagSet.Bool("prefetch-patterns", true, "")
+	ctx := cli.NewContext(app, flagSet, nil)
+
+	patterns, err := getPrefetchPatterns(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "/etc\n/bin\n", patterns)
+}
+
+func TestMainCheckCommand(t *testing.T) {
+	// Save global state
+	oldArgs := os.Args
+	oldLevel := logrus.GetLevel()
+	oldOutput := logrus.StandardLogger().Out
+	oldFormatter := logrus.StandardLogger().Formatter
+
+	defer func() {
+		os.Args = oldArgs
+		logrus.SetLevel(oldLevel)
+		logrus.SetOutput(oldOutput)
+		logrus.SetFormatter(oldFormatter)
+		logrus.StandardLogger().ExitFunc = nil
+	}()
+
+	// Prevent logrus.Fatal from calling os.Exit
+	logrus.StandardLogger().ExitFunc = func(code int) {}
+
+	tmpDir := t.TempDir()
+	os.Args = []string{"nydusify", "check",
+		"--target", "localhost:1/test:latest",
+		"--work-dir", tmpDir,
+	}
+
+	main()
+}
+
+func TestMainConvertCommand(t *testing.T) {
+	oldArgs := os.Args
+	oldLevel := logrus.GetLevel()
+	oldOutput := logrus.StandardLogger().Out
+	oldFormatter := logrus.StandardLogger().Formatter
+
+	defer func() {
+		os.Args = oldArgs
+		logrus.SetLevel(oldLevel)
+		logrus.SetOutput(oldOutput)
+		logrus.SetFormatter(oldFormatter)
+		logrus.StandardLogger().ExitFunc = nil
+	}()
+
+	logrus.StandardLogger().ExitFunc = func(code int) {}
+
+	tmpDir := t.TempDir()
+	os.Args = []string{"nydusify", "convert",
+		"--source", "localhost:1/source:latest",
+		"--target", "localhost:1/target:latest",
+		"--work-dir", tmpDir,
+	}
+
+	main()
+}

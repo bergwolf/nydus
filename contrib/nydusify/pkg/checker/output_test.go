@@ -143,3 +143,94 @@ func TestPrettyDumpNestedDirectory(t *testing.T) {
 	err := prettyDump("data", outputPath)
 	require.Error(t, err)
 }
+
+func TestPrettyDumpUnmarshalableType(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "output.json")
+
+	// Channels cannot be marshaled to JSON
+	err := prettyDump(make(chan int), outputPath)
+	require.Error(t, err)
+
+	// File should not be created on marshal failure
+	_, err = os.Stat(outputPath)
+	require.True(t, os.IsNotExist(err))
+}
+
+func TestPrettyDumpFuncType(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "output.json")
+
+	// Functions cannot be marshaled to JSON
+	err := prettyDump(func() {}, outputPath)
+	require.Error(t, err)
+}
+
+func TestPrettyDumpWithNumericTypes(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name     string
+		value    interface{}
+		expected string
+	}{
+		{"integer", 42, "42"},
+		{"float", 3.14, "3.14"},
+		{"negative", -1, "-1"},
+		{"zero", 0, "0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(tmpDir, tt.name+".json")
+			err := prettyDump(tt.value, path)
+			require.NoError(t, err)
+
+			content, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, string(content))
+		})
+	}
+}
+
+func TestPrettyDumpWithBoolean(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "bool.json")
+
+	err := prettyDump(true, path)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "true", string(content))
+}
+
+func TestPrettyDumpLargeStruct(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "large.json")
+
+	// Create a large nested structure
+	type inner struct {
+		Key   string            `json:"key"`
+		Tags  map[string]string `json:"tags"`
+		Items []int             `json:"items"`
+	}
+	data := struct {
+		Name   string  `json:"name"`
+		Nested []inner `json:"nested"`
+	}{
+		Name: "test",
+		Nested: []inner{
+			{Key: "a", Tags: map[string]string{"env": "prod"}, Items: []int{1, 2, 3}},
+			{Key: "b", Tags: map[string]string{"env": "dev"}, Items: []int{4, 5}},
+		},
+	}
+
+	err := prettyDump(data, path)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(content), "\"name\": \"test\"")
+	require.Contains(t, string(content), "\"env\": \"prod\"")
+}

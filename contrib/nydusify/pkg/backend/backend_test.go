@@ -5,6 +5,7 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -226,3 +227,87 @@ func TestNewBackendVariousUnsupportedTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestRegistryReaderPanics(t *testing.T) {
+	r := &Registry{}
+	require.Panics(t, func() { r.Reader("any-blob") })
+}
+
+func TestRegistryRangeReaderPanics(t *testing.T) {
+	r := &Registry{}
+	require.Panics(t, func() { r.RangeReader("any-blob") })
+}
+
+func TestRegistrySizePanics(t *testing.T) {
+	r := &Registry{}
+	require.Panics(t, func() { r.Size("any-blob") })
+}
+
+func TestRegistryUploadFileNotFound(t *testing.T) {
+	r := &Registry{}
+	_, err := r.Upload(context.Background(), "blob-id", "/nonexistent/path/blob", 100, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Open blob file")
+}
+
+func TestBlobDescEmptyID(t *testing.T) {
+	desc := blobDesc(0, "")
+	require.Equal(t, int64(0), desc.Size)
+	require.Equal(t, utils.MediaTypeNydusBlob, desc.MediaType)
+	require.Equal(t, "true", desc.Annotations[utils.LayerAnnotationNydusBlob])
+}
+
+func TestBlobDescNegativeSize(t *testing.T) {
+	desc := blobDesc(-1, "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234")
+	require.Equal(t, int64(-1), desc.Size)
+	require.Equal(t, utils.MediaTypeNydusBlob, desc.MediaType)
+}
+
+func TestBlobDescDigestFormat(t *testing.T) {
+	blobID := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	desc := blobDesc(1024, blobID)
+	require.Equal(t, "sha256:"+blobID, desc.Digest.String())
+	require.Equal(t, "sha256:"+blobID, desc.Annotations[utils.LayerAnnotationUncompressed])
+}
+
+func TestNewBackendRegistryWithNilRemote(t *testing.T) {
+	b, err := NewBackend("registry", nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	require.Equal(t, RegistryBackend, b.Type())
+}
+
+func TestNewBackendOSSEmptyJSON(t *testing.T) {
+	_, err := NewBackend("oss", []byte(""), nil)
+	require.Error(t, err)
+}
+
+func TestNewBackendS3EmptyJSON(t *testing.T) {
+	_, err := NewBackend("s3", []byte(""), nil)
+	require.Error(t, err)
+}
+
+func TestRegistryCheckAlwaysTrue(t *testing.T) {
+	tests := []string{"", "abc", "sha256:1234", "nonexistent-blob"}
+	for _, blobID := range tests {
+		t.Run(blobID, func(t *testing.T) {
+			r := &Registry{}
+			ok, err := r.Check(blobID)
+			require.NoError(t, err)
+			require.True(t, ok)
+		})
+	}
+}
+
+func TestRegistryFinalizeIdempotent(t *testing.T) {
+	r := &Registry{}
+	for i := 0; i < 3; i++ {
+		require.NoError(t, r.Finalize(false))
+		require.NoError(t, r.Finalize(true))
+	}
+}
+
+// Verify Backend interface compliance at compile time
+var _ Backend = (*Registry)(nil)
+var _ Backend = (*OSSBackend)(nil)
+var _ Backend = (*S3Backend)(nil)
