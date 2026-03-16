@@ -195,3 +195,348 @@ impl EndpointHandler for ConfigHandler {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dbs_uhttp::StatusCode;
+
+    fn ok_kicker(_req: ApiRequest) -> ApiResponse {
+        Ok(ApiResponsePayload::Empty)
+    }
+
+    #[test]
+    fn test_http_root_v1() {
+        assert_eq!(HTTP_ROOT_V1, "/api/v1");
+    }
+
+    #[test]
+    fn test_info_handler_get() {
+        let handler = InfoHandler {};
+        let kicker = |_req: ApiRequest| -> ApiResponse {
+            Ok(ApiResponsePayload::DaemonInfo("{}".to_string()))
+        };
+        let req = Request::try_from(
+            b"GET http://localhost/api/v1/daemon HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        let resp = handler.handle_request(&req, &kicker).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_info_handler_put() {
+        let handler = InfoHandler {};
+        let body = r#"{"log_level":"debug"}"#;
+        let raw = format!(
+            "PUT http://localhost/api/v1/daemon HTTP/1.0\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let req = Request::try_from(raw.as_bytes(), None).unwrap();
+        let resp = handler.handle_request(&req, &ok_kicker).unwrap();
+        assert_eq!(resp.status(), StatusCode::NoContent);
+    }
+
+    #[test]
+    fn test_info_handler_bad_method() {
+        let handler = InfoHandler {};
+        let req = Request::try_from(
+            b"DELETE http://localhost/api/v1/daemon HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        assert!(handler.handle_request(&req, &ok_kicker).is_err());
+    }
+
+    #[test]
+    fn test_fs_backend_info_get() {
+        let handler = FsBackendInfo {};
+        let kicker = |_req: ApiRequest| -> ApiResponse {
+            Ok(ApiResponsePayload::FsBackendInfo("{}".to_string()))
+        };
+        let req = Request::try_from(
+            b"GET http://localhost/api/v1/daemon/backend?mountpoint=/mnt HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        let resp = handler.handle_request(&req, &kicker).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_fs_backend_info_missing_mountpoint() {
+        let handler = FsBackendInfo {};
+        let req = Request::try_from(
+            b"GET http://localhost/api/v1/daemon/backend HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        let result = handler.handle_request(&req, &ok_kicker);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fs_backend_info_bad_method() {
+        let handler = FsBackendInfo {};
+        let req = Request::try_from(
+            b"PUT http://localhost/api/v1/daemon/backend HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        assert!(handler.handle_request(&req, &ok_kicker).is_err());
+    }
+
+    #[test]
+    fn test_metrics_fs_global_handler_get() {
+        let handler = MetricsFsGlobalHandler {};
+        let kicker = |_req: ApiRequest| -> ApiResponse {
+            Ok(ApiResponsePayload::FsGlobalMetrics("{}".to_string()))
+        };
+        let req = Request::try_from(
+            b"GET http://localhost/api/v1/metrics HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        let resp = handler.handle_request(&req, &kicker).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_metrics_fs_global_handler_get_with_id() {
+        let handler = MetricsFsGlobalHandler {};
+        let kicker = |_req: ApiRequest| -> ApiResponse {
+            Ok(ApiResponsePayload::FsGlobalMetrics("{}".to_string()))
+        };
+        let req = Request::try_from(
+            b"GET http://localhost/api/v1/metrics?id=test HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        let resp = handler.handle_request(&req, &kicker).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_metrics_fs_global_handler_bad_method() {
+        let handler = MetricsFsGlobalHandler {};
+        let req = Request::try_from(
+            b"POST http://localhost/api/v1/metrics HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        assert!(handler.handle_request(&req, &ok_kicker).is_err());
+    }
+
+    #[test]
+    fn test_metrics_fs_access_pattern_handler_get() {
+        let handler = MetricsFsAccessPatternHandler {};
+        let kicker = |_req: ApiRequest| -> ApiResponse {
+            Ok(ApiResponsePayload::FsFilesPatterns("{}".to_string()))
+        };
+        let req = Request::try_from(
+            b"GET http://localhost/api/v1/metrics/pattern HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        let resp = handler.handle_request(&req, &kicker).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_metrics_fs_access_pattern_handler_bad_method() {
+        let handler = MetricsFsAccessPatternHandler {};
+        let req = Request::try_from(
+            b"POST http://localhost/api/v1/metrics/pattern HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        assert!(handler.handle_request(&req, &ok_kicker).is_err());
+    }
+
+    #[test]
+    fn test_metrics_fs_files_handler_get() {
+        let handler = MetricsFsFilesHandler {};
+        let kicker = |_req: ApiRequest| -> ApiResponse {
+            Ok(ApiResponsePayload::FsFilesMetrics("{}".to_string()))
+        };
+        let req = Request::try_from(
+            b"GET http://localhost/api/v1/metrics/files HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        let resp = handler.handle_request(&req, &kicker).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_metrics_fs_files_handler_get_with_params() {
+        let handler = MetricsFsFilesHandler {};
+        let kicker = |_req: ApiRequest| -> ApiResponse {
+            Ok(ApiResponsePayload::FsFilesMetrics("{}".to_string()))
+        };
+        let req = Request::try_from(
+            b"GET http://localhost/api/v1/metrics/files?id=test&latest=true HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        let resp = handler.handle_request(&req, &kicker).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_metrics_fs_files_handler_bad_method() {
+        let handler = MetricsFsFilesHandler {};
+        let req = Request::try_from(
+            b"POST http://localhost/api/v1/metrics/files HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        assert!(handler.handle_request(&req, &ok_kicker).is_err());
+    }
+
+    #[test]
+    fn test_metrics_fs_inflight_handler_get() {
+        let handler = MetricsFsInflightHandler {};
+        let kicker = |_req: ApiRequest| -> ApiResponse {
+            Ok(ApiResponsePayload::FsInflightMetrics("{}".to_string()))
+        };
+        let req = Request::try_from(
+            b"GET http://localhost/api/v1/metrics/inflight HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        let resp = handler.handle_request(&req, &kicker).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_metrics_fs_inflight_handler_bad_method() {
+        let handler = MetricsFsInflightHandler {};
+        let req = Request::try_from(
+            b"POST http://localhost/api/v1/metrics/inflight HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        assert!(handler.handle_request(&req, &ok_kicker).is_err());
+    }
+
+    #[test]
+    fn test_config_handler_get() {
+        let handler = ConfigHandler {};
+        let kicker = |_req: ApiRequest| -> ApiResponse {
+            Ok(ApiResponsePayload::Config(std::collections::HashMap::new()))
+        };
+        let req = Request::try_from(
+            b"GET http://localhost/api/v1/config HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        let resp = handler.handle_request(&req, &kicker).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_config_handler_put() {
+        let handler = ConfigHandler {};
+        let body = r#"{"key1":"value1"}"#;
+        let raw = format!(
+            "PUT http://localhost/api/v1/config HTTP/1.0\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let req = Request::try_from(raw.as_bytes(), None).unwrap();
+        let resp = handler.handle_request(&req, &ok_kicker).unwrap();
+        assert_eq!(resp.status(), StatusCode::NoContent);
+    }
+
+    #[test]
+    fn test_config_handler_bad_method() {
+        let handler = ConfigHandler {};
+        let req = Request::try_from(
+            b"DELETE http://localhost/api/v1/config HTTP/1.0\r\n\r\n",
+            None,
+        )
+        .unwrap();
+        assert!(handler.handle_request(&req, &ok_kicker).is_err());
+    }
+
+    #[test]
+    fn test_convert_to_response_empty() {
+        let resp = convert_to_response(Ok(ApiResponsePayload::Empty), HttpError::Configure);
+        assert_eq!(resp.status(), StatusCode::NoContent);
+    }
+
+    #[test]
+    fn test_convert_to_response_daemon_info() {
+        let resp = convert_to_response(
+            Ok(ApiResponsePayload::DaemonInfo("{}".to_string())),
+            HttpError::DaemonInfo,
+        );
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_convert_to_response_fs_global_metrics() {
+        let resp = convert_to_response(
+            Ok(ApiResponsePayload::FsGlobalMetrics("{}".to_string())),
+            HttpError::GlobalMetrics,
+        );
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_convert_to_response_fs_files_metrics() {
+        let resp = convert_to_response(
+            Ok(ApiResponsePayload::FsFilesMetrics("{}".to_string())),
+            HttpError::FsFilesMetrics,
+        );
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_convert_to_response_fs_files_patterns() {
+        let resp = convert_to_response(
+            Ok(ApiResponsePayload::FsFilesPatterns("{}".to_string())),
+            HttpError::Pattern,
+        );
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_convert_to_response_fs_backend_info() {
+        let resp = convert_to_response(
+            Ok(ApiResponsePayload::FsBackendInfo("{}".to_string())),
+            HttpError::FsBackendInfo,
+        );
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_convert_to_response_fs_inflight_metrics() {
+        let resp = convert_to_response(
+            Ok(ApiResponsePayload::FsInflightMetrics("{}".to_string())),
+            HttpError::InflightMetrics,
+        );
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_convert_to_response_config() {
+        let mut config = std::collections::HashMap::new();
+        config.insert("key".to_string(), "value".to_string());
+        let resp = convert_to_response(
+            Ok(ApiResponsePayload::Config(config)),
+            HttpError::Configure,
+        );
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_convert_to_response_error() {
+        let api_resp: ApiResponse = Err(ApiError::ResponsePayloadType);
+        let resp = convert_to_response(api_resp, HttpError::DaemonInfo);
+        assert_eq!(resp.status(), StatusCode::InternalServerError);
+    }
+}

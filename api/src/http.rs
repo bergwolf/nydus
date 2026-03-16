@@ -278,3 +278,145 @@ impl From<ErrorMessage> for Vec<u8> {
         serde_json::to_vec(&msg).unwrap()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_api_mount_cmd_deserialization() {
+        let json = r#"{"source":"/path/to/source","config":"{}","fs_type":"rafs"}"#;
+        let cmd: ApiMountCmd = serde_json::from_str(json).unwrap();
+        assert_eq!(cmd.source, "/path/to/source");
+        assert_eq!(cmd.config, "{}");
+        assert_eq!(cmd.fs_type, "rafs");
+        assert!(cmd.prefetch_files.is_none());
+    }
+
+    #[test]
+    fn test_api_mount_cmd_with_prefetch_files() {
+        let json = r#"{"source":"/src","config":"cfg","prefetch_files":["/a","/b"]}"#;
+        let cmd: ApiMountCmd = serde_json::from_str(json).unwrap();
+        assert_eq!(cmd.source, "/src");
+        let files = cmd.prefetch_files.unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0], "/a");
+        assert_eq!(files[1], "/b");
+    }
+
+    #[test]
+    fn test_api_mount_cmd_default_fs_type() {
+        let json = r#"{"source":"/src","config":"cfg"}"#;
+        let cmd: ApiMountCmd = serde_json::from_str(json).unwrap();
+        assert_eq!(cmd.fs_type, "");
+    }
+
+    #[test]
+    fn test_api_umount_cmd_deserialization() {
+        let json = r#"{"mountpoint":"/mnt/test"}"#;
+        let cmd: ApiUmountCmd = serde_json::from_str(json).unwrap();
+        assert_eq!(cmd.mountpoint, "/mnt/test");
+    }
+
+    #[test]
+    fn test_daemon_conf_deserialization() {
+        let json = r#"{"log_level":"info"}"#;
+        let conf: DaemonConf = serde_json::from_str(json).unwrap();
+        assert_eq!(conf.log_level, "info");
+    }
+
+    #[test]
+    fn test_blob_cache_object_id_serialization_roundtrip() {
+        let obj = BlobCacheObjectId {
+            domain_id: "domain1".to_string(),
+            blob_id: "blob1".to_string(),
+        };
+        let json = serde_json::to_string(&obj).unwrap();
+        let deserialized: BlobCacheObjectId = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.domain_id, "domain1");
+        assert_eq!(deserialized.blob_id, "blob1");
+    }
+
+    #[test]
+    fn test_blob_cache_object_id_default() {
+        let obj = BlobCacheObjectId::default();
+        assert_eq!(obj.domain_id, "");
+        assert_eq!(obj.blob_id, "");
+    }
+
+    #[test]
+    fn test_blob_cache_object_id_deserialization_with_defaults() {
+        let json = r#"{}"#;
+        let obj: BlobCacheObjectId = serde_json::from_str(json).unwrap();
+        assert_eq!(obj.domain_id, "");
+        assert_eq!(obj.blob_id, "");
+    }
+
+    #[test]
+    fn test_error_message_to_vec_u8() {
+        let msg = ErrorMessage {
+            code: "ERR_TEST".to_string(),
+            message: "something went wrong".to_string(),
+        };
+        let bytes: Vec<u8> = msg.into();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["code"], "ERR_TEST");
+        assert_eq!(parsed["message"], "something went wrong");
+    }
+
+    #[test]
+    fn test_metrics_error_display() {
+        let err = MetricsError::NoCounter;
+        assert_eq!(format!("{}", err), "no counter found for the metric");
+
+        let serde_err = serde_json::from_str::<i32>("invalid").unwrap_err();
+        let err = MetricsError::Serialize(serde_err);
+        let display = format!("{}", err);
+        assert!(display.starts_with("failed to serialize metric:"));
+    }
+
+    #[test]
+    fn test_api_error_display() {
+        let err = ApiError::DaemonAbnormal(DaemonErrorKind::NotReady);
+        let display = format!("{}", err);
+        assert!(display.contains("daemon internal error"));
+
+        let err = ApiError::Events("event err".to_string());
+        assert_eq!(format!("{}", err), "daemon events error: event err");
+
+        let err = ApiError::ResponsePayloadType;
+        assert_eq!(
+            format!("{}", err),
+            "failed to parse response payload type"
+        );
+
+        let err = ApiError::Wakeup(io::Error::new(io::ErrorKind::Other, "wake fail"));
+        let display = format!("{}", err);
+        assert!(display.contains("failed to wake up the daemon"));
+    }
+
+    #[test]
+    fn test_http_error_debug() {
+        let dbg = format!("{:?}", HttpError::BadRequest);
+        assert_eq!(dbg, "BadRequest");
+
+        let dbg = format!("{:?}", HttpError::NoRoute);
+        assert_eq!(dbg, "NoRoute");
+
+        let err = ApiError::ResponsePayloadType;
+        let dbg = format!("{:?}", HttpError::DaemonInfo(err));
+        assert!(dbg.contains("DaemonInfo"));
+
+        let err = ApiError::Events("test".to_string());
+        let dbg = format!("{:?}", HttpError::Events(err));
+        assert!(dbg.contains("Events"));
+
+        let serde_err = serde_json::from_str::<i32>("bad").unwrap_err();
+        let dbg = format!("{:?}", HttpError::ParseBody(serde_err));
+        assert!(dbg.contains("ParseBody"));
+
+        let dbg = format!("{:?}", HttpError::QueryString("missing param".to_string()));
+        assert!(dbg.contains("QueryString"));
+    }
+}
