@@ -789,4 +789,293 @@ mod tests {
             assert_eq!(res.unwrap(), 0);
         });
     }
+
+    #[test]
+    fn test_meta_blob_nonexistent_file() {
+        let result = MetaBlob::new("/nonexistent/path/to/blob");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_meta_blob_invalid_size() {
+        // Create a file with non-block-aligned size
+        let tmpdir = TempDir::new().unwrap();
+        let path = tmpdir.as_path().join("invalid_blob");
+        std::fs::write(&path, "short").unwrap();
+        let result = MetaBlob::new(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generate_blob_key_edge_cases() {
+        // Both empty
+        assert_eq!(&generate_blob_key("", ""), "");
+        // Domain empty, blob non-empty
+        assert_eq!(&generate_blob_key("", "b"), "b");
+        // Domain non-empty, blob empty
+        assert_eq!(&generate_blob_key("d", ""), "d/");
+        // Both non-empty with special characters
+        assert_eq!(
+            &generate_blob_key("domain-1", "blob/with/slashes"),
+            "domain-1/blob/with/slashes"
+        );
+    }
+
+    #[test]
+    fn test_blob_cache_state_try_add_duplicate_data_blob() {
+        let blob_info = Arc::new(BlobInfo::new(
+            0,
+            "test-blob".to_string(),
+            0,
+            0,
+            0 as u32,
+            0,
+            nydus_storage::device::BlobFeatures::empty(),
+        ));
+        let config = Arc::new(ConfigV2::default());
+        let data_blob1 =
+            BlobConfig::new_data_blob("domain".to_string(), blob_info.clone(), config.clone());
+        let data_blob2 =
+            BlobConfig::new_data_blob("domain".to_string(), blob_info.clone(), config.clone());
+
+        let mut state = BlobCacheState::new();
+        // First add should succeed
+        assert!(state.try_add(data_blob1).is_ok());
+        // Second add of same data blob should succeed (ref counted)
+        assert!(state.try_add(data_blob2).is_ok());
+    }
+
+    #[test]
+    fn test_blob_cache_state_get_nonexistent() {
+        let state = BlobCacheState::new();
+        assert!(state.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_blob_cache_state_remove_nonexistent() {
+        let mut state = BlobCacheState::new();
+        let param = BlobCacheObjectId {
+            domain_id: "d".to_string(),
+            blob_id: "b".to_string(),
+        };
+        assert!(state.remove(&param).is_err());
+    }
+
+    #[test]
+    fn test_blob_cache_state_remove_by_domain() {
+        let blob_info = Arc::new(BlobInfo::new(
+            0,
+            "test-blob".to_string(),
+            0,
+            0,
+            0 as u32,
+            0,
+            nydus_storage::device::BlobFeatures::empty(),
+        ));
+        let config = Arc::new(ConfigV2::default());
+        let data_blob1 =
+            BlobConfig::new_data_blob("domain1".to_string(), blob_info.clone(), config.clone());
+        let data_blob2 =
+            BlobConfig::new_data_blob("domain2".to_string(), blob_info.clone(), config.clone());
+
+        let mut state = BlobCacheState::new();
+        state.try_add(data_blob1).unwrap();
+        state.try_add(data_blob2).unwrap();
+        assert_eq!(state.id_to_config_map.len(), 2);
+
+        // Remove all blobs in domain1
+        let param = BlobCacheObjectId {
+            domain_id: "domain1".to_string(),
+            blob_id: "".to_string(),
+        };
+        state.remove(&param).unwrap();
+        assert_eq!(state.id_to_config_map.len(), 1);
+    }
+
+    #[test]
+    fn test_blob_config_key_and_meta_config() {
+        let config = Arc::new(ConfigV2::default());
+        let blob_info = Arc::new(BlobInfo::new(
+            0,
+            "test-blob".to_string(),
+            0,
+            0,
+            0 as u32,
+            0,
+            nydus_storage::device::BlobFeatures::empty(),
+        ));
+
+        let data_blob =
+            BlobConfig::new_data_blob("domain".to_string(), blob_info.clone(), config.clone());
+        assert_eq!(data_blob.key(), "domain/test-blob");
+        assert!(data_blob.meta_config().is_none());
+
+        let meta_blob = BlobConfig::new_meta_blob(
+            "domain".to_string(),
+            "meta1".to_string(),
+            PathBuf::from("/tmp/meta"),
+            config.clone(),
+            HashMap::new(),
+            false,
+        );
+        assert_eq!(meta_blob.key(), "domain/meta1");
+        assert!(meta_blob.meta_config().is_some());
+    }
+
+    #[test]
+    fn test_blob_config_config_v2() {
+        let config = Arc::new(ConfigV2::default());
+        let blob_info = Arc::new(BlobInfo::new(
+            0,
+            "test-blob".to_string(),
+            0,
+            0,
+            0 as u32,
+            0,
+            nydus_storage::device::BlobFeatures::empty(),
+        ));
+
+        let data_blob =
+            BlobConfig::new_data_blob("domain".to_string(), blob_info.clone(), config.clone());
+        let _ = data_blob.config_v2();
+
+        let meta_blob = BlobConfig::new_meta_blob(
+            "domain".to_string(),
+            "meta1".to_string(),
+            PathBuf::from("/tmp/meta"),
+            config.clone(),
+            HashMap::new(),
+            false,
+        );
+        let _ = meta_blob.config_v2();
+    }
+
+    #[test]
+    fn test_blob_cache_mgr_new_and_default() {
+        let mgr = BlobCacheMgr::new();
+        assert!(mgr.get_config("anything").is_none());
+
+        let mgr2 = BlobCacheMgr::default();
+        assert!(mgr2.get_config("anything").is_none());
+    }
+
+    #[test]
+    fn test_blob_cache_mgr_remove_nonexistent() {
+        let mgr = BlobCacheMgr::new();
+        let param = BlobCacheObjectId {
+            domain_id: "d".to_string(),
+            blob_id: "b".to_string(),
+        };
+        assert!(mgr.remove_blob_entry(&param).is_err());
+    }
+
+    #[test]
+    fn test_meta_blob_config_accessors() {
+        let config = Arc::new(ConfigV2::default());
+        let meta = MetaBlobConfig {
+            blob_id: "blob123".to_string(),
+            scoped_blob_id: "domain/blob123".to_string(),
+            path: PathBuf::from("/tmp/test"),
+            config: config.clone(),
+            blobs: Mutex::new(Vec::new()),
+            blob_extra_infos: HashMap::new(),
+            is_tarfs_mode: true,
+        };
+
+        assert_eq!(meta.blob_id(), "blob123");
+        assert_eq!(meta.path(), Path::new("/tmp/test"));
+        assert!(meta.is_tarfs_mode());
+        assert!(meta.get_blobs().is_empty());
+        assert!(meta.get_blob_extra_info("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_data_blob_config_accessors() {
+        let blob_info = Arc::new(BlobInfo::new(
+            0,
+            "test-blob".to_string(),
+            0,
+            0,
+            0 as u32,
+            0,
+            nydus_storage::device::BlobFeatures::empty(),
+        ));
+        let config = Arc::new(ConfigV2::default());
+        let data_blob = DataBlobConfig {
+            scoped_blob_id: "domain/test-blob".to_string(),
+            blob_info: blob_info.clone(),
+            config: config.clone(),
+            ref_count: AtomicU32::new(1),
+        };
+
+        assert_eq!(data_blob.blob_info().blob_id(), "test-blob");
+        let _ = data_blob.config_v2();
+    }
+
+    #[test]
+    fn test_add_blob_entry_invalid_type() {
+        let content = r#"{
+            "type": "datablob",
+            "id": "blob1",
+            "domain_id": "domain1",
+            "config": {
+                "id": "factory1",
+                "backend_type": "localfs",
+                "backend_config": {},
+                "cache_type": "fscache",
+                "cache_config": {},
+                "metadata_path": "/tmp/metadata1"
+            }
+        }"#;
+        let entry: BlobCacheEntry = serde_json::from_str(content).unwrap();
+        let mgr = BlobCacheMgr::new();
+        assert!(mgr.add_blob_entry(&entry).is_err());
+    }
+
+    #[test]
+    fn test_add_blob_entry_data_blob_type() {
+        let content = r#"{
+            "type": "datablob",
+            "id": "blob1",
+            "domain_id": "domain1",
+            "config": {
+                "id": "factory1",
+                "backend_type": "localfs",
+                "backend_config": {},
+                "cache_type": "fscache",
+                "cache_config": {},
+                "metadata_path": "/tmp/metadata1"
+            }
+        }"#;
+        let entry: BlobCacheEntry = serde_json::from_str(content).unwrap();
+        let mgr = BlobCacheMgr::new();
+        assert!(mgr.add_blob_entry(&entry).is_err());
+    }
+
+    #[test]
+    fn test_get_meta_info_invalid_domain_id() {
+        let tmpdir = TempDir::new().unwrap();
+        let path = tmpdir.as_path().join("bootstrap1");
+        std::fs::write(&path, "metadata").unwrap();
+        let config = create_factory_config();
+        let content = config.replace("/tmp/nydus", tmpdir.as_path().to_str().unwrap());
+        let mut entry: BlobCacheEntry = serde_json::from_str(&content).unwrap();
+        entry.domain_id = "invalid/domain".to_string();
+
+        let mgr = BlobCacheMgr::new();
+        assert!(mgr.get_meta_info(&entry).is_err());
+    }
+
+    #[test]
+    fn test_get_meta_info_missing_config() {
+        let content = r#"{
+            "type": "bootstrap",
+            "id": "blob1",
+            "domain_id": "domain1"
+        }"#;
+        let entry: BlobCacheEntry = serde_json::from_str(content).unwrap();
+
+        let mgr = BlobCacheMgr::new();
+        assert!(mgr.get_meta_info(&entry).is_err());
+    }
 }

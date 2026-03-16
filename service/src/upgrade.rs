@@ -671,4 +671,171 @@ mod tests {
         assert!(upgrade_mgr.hold_file(&temp).is_ok());
         assert!(upgrade_mgr.return_file().is_some());
     }
+
+    #[test]
+    fn test_upgrade_manager_return_file_none() {
+        let mut upgrade_mgr = UpgradeManager::new("dummy_socket".into());
+        // No file held, should return None
+        assert!(upgrade_mgr.return_file().is_none());
+    }
+
+    #[test]
+    fn test_upgrade_manager_remove_blob_entry_nonexistent() {
+        let mut upgrade_mgr = UpgradeManager::new("dummy_socket".into());
+        // Removing non-existent entry should not panic (just logs a warning)
+        upgrade_mgr.remove_blob_entry_state("domain1", "blob1");
+        assert!(upgrade_mgr
+            .fscache_deamon_stat
+            .blob_entry_map
+            .is_empty());
+    }
+
+    #[test]
+    fn test_upgrade_manager_remove_blob_entry_empty_blob_id() {
+        let mut upgrade_mgr = UpgradeManager::new("dummy_socket".into());
+
+        let content = r#"{
+            "type": "bootstrap",
+            "id": "domain1",
+            "config": {
+                "id": "cache1",
+                "backend_type": "localfs",
+                "backend_config": {},
+                "cache_type": "fscache",
+                "cache_config": {},
+                "metadata_path": "/tmp/metadata1"
+            },
+            "domain_id": "domain1"
+        }"#;
+        let entry: BlobCacheEntry = serde_json::from_str(content).unwrap();
+        upgrade_mgr.add_blob_entry_state(entry);
+        assert_eq!(upgrade_mgr.fscache_deamon_stat.blob_entry_map.len(), 1);
+
+        // Empty blob_id means use domain_id as blob_id
+        upgrade_mgr.remove_blob_entry_state("domain1", "");
+        assert!(upgrade_mgr
+            .fscache_deamon_stat
+            .blob_entry_map
+            .is_empty());
+    }
+
+    #[test]
+    fn test_upgrade_manager_update_nonexistent_mount() {
+        let mut upgrade_mgr = UpgradeManager::new("dummy_socket".into());
+
+        let cmd = FsBackendMountCmd {
+            fs_type: FsBackendType::Rafs,
+            config: "{}".to_string(),
+            mountpoint: "nonexistent".to_string(),
+            source: "src".to_string(),
+            prefetch_files: None,
+        };
+        assert!(matches!(
+            upgrade_mgr.update_mounts_state(cmd),
+            Err(Error::NotFound)
+        ));
+    }
+
+    #[test]
+    fn test_upgrade_manager_remove_nonexistent_mount() {
+        let mut upgrade_mgr = UpgradeManager::new("dummy_socket".into());
+        // Removing non-existent mount should not panic (just logs a warning)
+        let umount_cmd = FsBackendUmountCmd {
+            mountpoint: "nonexistent".to_string(),
+        };
+        upgrade_mgr.remove_mounts_state(umount_cmd);
+    }
+
+    #[test]
+    fn test_upgrade_mgr_error_display() {
+        let err = UpgradeMgrError::MissingSupervisorPath;
+        assert_eq!(format!("{}", err), "missing supervisor path");
+
+        let io_err = io::Error::new(io::ErrorKind::Other, "test");
+        let err = UpgradeMgrError::Serialize(io_err);
+        assert!(format!("{}", err).contains("failed to serialize"));
+
+        let io_err = io::Error::new(io::ErrorKind::Other, "test");
+        let err = UpgradeMgrError::Deserialize(io_err);
+        assert!(format!("{}", err).contains("failed to deserialize"));
+
+        let io_err = io::Error::new(io::ErrorKind::Other, "test");
+        let err = UpgradeMgrError::CloneFile(io_err);
+        assert!(format!("{}", err).contains("failed to clone file"));
+
+        let io_err = io::Error::new(io::ErrorKind::Other, "test");
+        let err = UpgradeMgrError::InitializeFscache(io_err);
+        assert!(format!("{}", err).contains("failed to initialize fscache"));
+    }
+
+    #[test]
+    fn test_upgrade_mgr_error_to_service_error() {
+        let err = UpgradeMgrError::MissingSupervisorPath;
+        let svc_err: Error = err.into();
+        assert!(matches!(svc_err, Error::UpgradeManager(_)));
+    }
+
+    #[test]
+    fn test_failover_policy_debug() {
+        assert_eq!(format!("{:?}", FailoverPolicy::None), "None");
+        assert_eq!(format!("{:?}", FailoverPolicy::Flush), "Flush");
+        assert_eq!(format!("{:?}", FailoverPolicy::Resend), "Resend");
+    }
+
+    #[test]
+    fn test_upgrade_manager_save_fscache_states() {
+        let mut upgrade_mgr = UpgradeManager::new("dummy_socket".into());
+        upgrade_mgr.save_fscache_states(8, "/var/cache".to_string());
+        assert_eq!(upgrade_mgr.fscache_deamon_stat.threads, 8);
+        assert_eq!(upgrade_mgr.fscache_deamon_stat.path, "/var/cache");
+
+        // Overwrite with new values
+        upgrade_mgr.save_fscache_states(2, "/tmp/cache".to_string());
+        assert_eq!(upgrade_mgr.fscache_deamon_stat.threads, 2);
+        assert_eq!(upgrade_mgr.fscache_deamon_stat.path, "/tmp/cache");
+    }
+
+    #[test]
+    fn test_upgrade_manager_save_fuse_cid() {
+        let mut upgrade_mgr = UpgradeManager::new("dummy_socket".into());
+        assert_eq!(upgrade_mgr.fuse_deamon_stat.fuse_conn_id, 0);
+        upgrade_mgr.save_fuse_cid(42);
+        assert_eq!(upgrade_mgr.fuse_deamon_stat.fuse_conn_id, 42);
+        upgrade_mgr.save_fuse_cid(u64::MAX);
+        assert_eq!(upgrade_mgr.fuse_deamon_stat.fuse_conn_id, u64::MAX);
+    }
+
+    #[test]
+    fn test_upgrade_manager_multiple_mounts() {
+        let mut upgrade_mgr = UpgradeManager::new("dummy_socket".into());
+
+        let cmd1 = FsBackendMountCmd {
+            fs_type: FsBackendType::Rafs,
+            config: "{}".to_string(),
+            mountpoint: "mount1".to_string(),
+            source: "src1".to_string(),
+            prefetch_files: None,
+        };
+        let cmd2 = FsBackendMountCmd {
+            fs_type: FsBackendType::Rafs,
+            config: "{}".to_string(),
+            mountpoint: "mount2".to_string(),
+            source: "src2".to_string(),
+            prefetch_files: Some(vec!["file1".to_string()]),
+        };
+
+        upgrade_mgr.add_mounts_state(cmd1, 1);
+        upgrade_mgr.add_mounts_state(cmd2, 2);
+        assert_eq!(upgrade_mgr.fuse_deamon_stat.fs_mount_cmd_map.len(), 2);
+
+        let umount = FsBackendUmountCmd {
+            mountpoint: "mount1".to_string(),
+        };
+        upgrade_mgr.remove_mounts_state(umount);
+        assert_eq!(upgrade_mgr.fuse_deamon_stat.fs_mount_cmd_map.len(), 1);
+        assert!(upgrade_mgr
+            .fuse_deamon_stat
+            .fs_mount_cmd_map
+            .contains_key("mount2"));
+    }
 }

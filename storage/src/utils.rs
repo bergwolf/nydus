@@ -541,4 +541,68 @@ mod tests {
         let invalid_fd: RawFd = -1;
         assert!(get_path_from_file(&invalid_fd).is_none());
     }
+
+    #[test]
+    fn test_check_hash() {
+        let data = b"hello world";
+        let digester = digest::Algorithm::Sha256;
+        let expected = RafsDigest::from_buf(data, digester);
+        assert!(check_hash(data, &expected, digester));
+
+        // Different data should not match
+        let wrong_data = b"hello world!";
+        assert!(!check_hash(wrong_data, &expected, digester));
+
+        // Empty data
+        let empty_digest = RafsDigest::from_buf(b"", digester);
+        assert!(check_hash(b"", &empty_digest, digester));
+    }
+
+    #[test]
+    fn test_check_crc() {
+        let data = b"hello world";
+        let crc = crc32::Crc32::new(crc32::Algorithm::Crc32Iscsi).from_buf(data);
+        assert!(check_crc(data, crc));
+
+        // Different data should not match
+        let wrong_data = b"hello world!";
+        assert!(!check_crc(wrong_data, crc));
+
+        // Empty data
+        let empty_crc = crc32::Crc32::new(crc32::Algorithm::Crc32Iscsi).from_buf(b"");
+        assert!(check_crc(b"", empty_crc));
+    }
+
+    #[test]
+    fn test_alloc_buf_various_sizes() {
+        let buf = alloc_buf(1);
+        assert_eq!(buf.len(), 1);
+
+        let buf = alloc_buf(4096);
+        assert_eq!(buf.len(), 4096);
+
+        let buf = alloc_buf(8192);
+        assert_eq!(buf.len(), 8192);
+    }
+
+    #[test]
+    fn test_readahead_does_not_panic() {
+        let temp_file = TempFile::new().unwrap();
+        let fd = temp_file.as_file().as_raw_fd();
+        // Should not panic even with empty file
+        readahead(fd, 0, 0);
+        readahead(fd, 0, 4096);
+        readahead(fd, 4096, 4096);
+    }
+
+    #[test]
+    fn test_mem_slice_cursor_inner_slice() {
+        let mut buf1 = vec![0x0u8; 4];
+        let vs1 = unsafe { FileVolatileSlice::from_raw_ptr(buf1.as_mut_ptr(), buf1.len()) };
+        let vs = [vs1];
+
+        let cursor = MemSliceCursor::new(&vs);
+        assert_eq!(cursor.inner_slice().len(), 1);
+        assert_eq!(cursor.inner_slice()[0].len(), 4);
+    }
 }

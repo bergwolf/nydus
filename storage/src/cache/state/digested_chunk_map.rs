@@ -59,3 +59,89 @@ impl ChunkIndexGetter for DigestedChunkMap {
         *chunk.chunk_id()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test::MockChunkInfo;
+
+    #[test]
+    fn test_new_creates_empty_map() {
+        let map = DigestedChunkMap::new();
+        let chunk = MockChunkInfo::new();
+        assert!(!map.is_ready(&chunk).unwrap());
+    }
+
+    #[test]
+    fn test_is_ready_returns_false_for_unknown_chunk() {
+        let map = DigestedChunkMap::new();
+        let mut chunk = MockChunkInfo::new();
+        chunk.block_id = RafsDigest { data: [1u8; 32] };
+        assert!(!map.is_ready(&chunk).unwrap());
+    }
+
+    #[test]
+    fn test_set_ready_then_is_ready() {
+        let map = DigestedChunkMap::new();
+        let mut chunk = MockChunkInfo::new();
+        chunk.block_id = RafsDigest { data: [1u8; 32] };
+
+        map.set_ready_and_clear_pending(&chunk).unwrap();
+        assert!(map.is_ready(&chunk).unwrap());
+    }
+
+    #[test]
+    fn test_multiple_chunks_tracked_independently() {
+        let map = DigestedChunkMap::new();
+        let mut chunk1 = MockChunkInfo::new();
+        chunk1.block_id = RafsDigest { data: [1u8; 32] };
+        let mut chunk2 = MockChunkInfo::new();
+        chunk2.block_id = RafsDigest { data: [2u8; 32] };
+
+        // Mark only chunk1 as ready
+        map.set_ready_and_clear_pending(&chunk1).unwrap();
+
+        assert!(map.is_ready(&chunk1).unwrap());
+        assert!(!map.is_ready(&chunk2).unwrap());
+
+        // Now mark chunk2 as ready too
+        map.set_ready_and_clear_pending(&chunk2).unwrap();
+        assert!(map.is_ready(&chunk1).unwrap());
+        assert!(map.is_ready(&chunk2).unwrap());
+    }
+
+    #[test]
+    fn test_get_index_returns_chunk_digest() {
+        let mut chunk = MockChunkInfo::new();
+        let digest = RafsDigest { data: [42u8; 32] };
+        chunk.block_id = digest;
+        assert_eq!(DigestedChunkMap::get_index(&chunk), digest);
+    }
+
+    #[test]
+    fn test_default_creates_empty_map() {
+        let map = DigestedChunkMap::default();
+        let chunk = MockChunkInfo::new();
+        assert!(!map.is_ready(&chunk).unwrap());
+    }
+
+    #[test]
+    fn test_set_ready_is_idempotent() {
+        let map = DigestedChunkMap::new();
+        let mut chunk = MockChunkInfo::new();
+        chunk.block_id = RafsDigest { data: [5u8; 32] };
+
+        map.set_ready_and_clear_pending(&chunk).unwrap();
+        map.set_ready_and_clear_pending(&chunk).unwrap();
+        assert!(map.is_ready(&chunk).unwrap());
+    }
+
+    #[test]
+    fn test_default_methods() {
+        let map = DigestedChunkMap::new();
+        let chunk = MockChunkInfo::new();
+        assert!(!map.is_pending(&chunk).unwrap());
+        assert!(!map.is_persist());
+        assert!(map.as_range_map().is_none());
+    }
+}

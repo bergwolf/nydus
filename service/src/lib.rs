@@ -307,4 +307,119 @@ mod tests {
         assert!(validate_threads_configuration("1025").is_err());
         assert!(validate_threads_configuration("test").is_err());
     }
+
+    #[test]
+    fn test_error_display() {
+        let e = Error::AlreadyExists;
+        assert!(format!("{}", e).contains("already exists"));
+
+        let e = Error::InvalidArguments("bad arg".to_string());
+        assert!(format!("{}", e).contains("bad arg"));
+
+        let e = Error::InvalidConfig("bad config".to_string());
+        assert!(format!("{}", e).contains("bad config"));
+
+        let e = Error::InvalidPrefetchList;
+        assert!(format!("{}", e).contains("prefetch"));
+
+        let e = Error::NotFound;
+        assert!(format!("{}", e).contains("doesn't exist"));
+
+        let e = Error::NotReady;
+        assert!(format!("{}", e).contains("not ready"));
+
+        let e = Error::Unsupported;
+        assert!(format!("{}", e).contains("unsupported"));
+
+        let e = Error::StartService("test".to_string());
+        assert!(format!("{}", e).contains("test"));
+
+        let e = Error::HandleEventNotEpollIn;
+        assert!(format!("{}", e).contains("input event"));
+
+        let e = Error::HandleEventUnknownEvent;
+        assert!(format!("{}", e).contains("unknown event"));
+
+        let e = Error::IterateQueue;
+        assert!(format!("{}", e).contains("descriptor chain"));
+
+        let e = Error::QueueMemoryUnset;
+        assert!(format!("{}", e).contains("memory configuration"));
+    }
+
+    #[test]
+    fn test_error_to_daemon_error_kind() {
+        let e = Error::NotReady;
+        let kind: DaemonErrorKind = e.into();
+        assert!(matches!(kind, DaemonErrorKind::NotReady));
+
+        let e = Error::Unsupported;
+        let kind: DaemonErrorKind = e.into();
+        assert!(matches!(kind, DaemonErrorKind::Unsupported));
+
+        let e = Error::AlreadyExists;
+        let kind: DaemonErrorKind = e.into();
+        assert!(matches!(kind, DaemonErrorKind::Other(_)));
+
+        let e = Error::InvalidArguments("test".to_string());
+        let kind: DaemonErrorKind = e.into();
+        assert!(matches!(kind, DaemonErrorKind::Other(_)));
+    }
+
+    #[test]
+    fn test_error_to_io_error() {
+        let e = Error::NotReady;
+        let io_err: io::Error = e.into();
+        assert_eq!(io_err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_fuse_notify_error_display() {
+        let e = FuseNotifyError::SysfsOpenError(io::Error::new(
+            io::ErrorKind::NotFound,
+            "file not found",
+        ));
+        assert!(format!("{}", e).contains("Sysfs file open error"));
+
+        let e = FuseNotifyError::SysfsWriteError(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "access denied",
+        ));
+        assert!(format!("{}", e).contains("Sysfs write error"));
+    }
+
+    #[test]
+    fn test_fs_backend_type_clone_debug_serialize() {
+        let t = FsBackendType::Rafs;
+        let t2 = t.clone();
+        assert_eq!(t, t2);
+        assert_eq!(format!("{:?}", t), "Rafs");
+
+        let serialized = serde_json::to_string(&t).unwrap();
+        let deserialized: FsBackendType = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(t, deserialized);
+
+        let t = FsBackendType::PassthroughFs;
+        let serialized = serde_json::to_string(&t).unwrap();
+        let deserialized: FsBackendType = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(t, deserialized);
+    }
+
+    #[test]
+    fn test_validate_threads_configuration_boundary() {
+        assert_eq!(validate_threads_configuration("1").unwrap(), 1);
+        assert_eq!(validate_threads_configuration("512").unwrap(), 512);
+        assert_eq!(validate_threads_configuration("1024").unwrap(), 1024);
+        assert!(validate_threads_configuration("0").is_err());
+        assert!(validate_threads_configuration("1025").is_err());
+        assert!(validate_threads_configuration("999999").is_err());
+        assert!(validate_threads_configuration("").is_err());
+        assert!(validate_threads_configuration("abc").is_err());
+        assert!(validate_threads_configuration("1.5").is_err());
+        assert!(validate_threads_configuration("-100").is_err());
+
+        // Test with String reference
+        let s = String::from("8");
+        assert_eq!(validate_threads_configuration(&s).unwrap(), 8);
+    }
 }

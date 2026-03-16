@@ -102,3 +102,80 @@ impl Display for StorageError {
 
 /// Specialized std::result::Result for storage subsystem.
 pub type StorageResult<T> = std::result::Result<T, StorageError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_chunk_size() {
+        assert_eq!(RAFS_DEFAULT_CHUNK_SIZE, 1024 * 1024);
+    }
+
+    #[test]
+    fn test_max_chunk_size() {
+        assert_eq!(RAFS_MAX_CHUNK_SIZE, 1024 * 1024 * 16);
+    }
+
+    #[test]
+    fn test_max_chunks_per_blob() {
+        assert_eq!(RAFS_MAX_CHUNKS_PER_BLOB, 1u32 << 24);
+    }
+
+    #[test]
+    fn test_batch_size_to_gap_shift() {
+        assert_eq!(RAFS_BATCH_SIZE_TO_GAP_SHIFT, 7);
+    }
+
+    #[test]
+    fn test_storage_error_display_unsupported() {
+        let err = StorageError::Unsupported;
+        assert_eq!(format!("{}", err), "unsupported storage operation");
+    }
+
+    #[test]
+    fn test_storage_error_display_timeout() {
+        let err = StorageError::Timeout;
+        assert!(format!("{}", err).contains("timeout"));
+    }
+
+    #[test]
+    fn test_storage_error_display_mem_overflow() {
+        let err = StorageError::MemOverflow;
+        assert!(format!("{}", err).contains("memory overflow"));
+    }
+
+    #[test]
+    fn test_storage_error_display_not_continuous() {
+        let err = StorageError::NotContinuous;
+        assert!(format!("{}", err).contains("not continuous"));
+    }
+
+    #[test]
+    fn test_storage_error_display_cache_index() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "missing");
+        let err = StorageError::CacheIndex(io_err);
+        let msg = format!("{}", err);
+        assert!(msg.contains("Wrong cache index"));
+        assert!(msg.contains("missing"));
+    }
+
+    #[test]
+    fn test_storage_error_debug() {
+        let err = StorageError::Unsupported;
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("Unsupported"));
+    }
+
+    #[test]
+    fn test_storage_result_ok() {
+        let result: StorageResult<u32> = Ok(42);
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_storage_result_err() {
+        let result: StorageResult<u32> = Err(StorageError::Timeout);
+        assert!(result.is_err());
+    }
+}

@@ -513,4 +513,105 @@ mod tests {
 
         assert!("xxxxxxxxxxxxx".parse::<FsBackendType>().is_err());
     }
+
+    #[test]
+    fn test_daemon_state_display() {
+        assert_eq!(format!("{}", DaemonState::INIT), "INIT");
+        assert_eq!(format!("{}", DaemonState::RUNNING), "RUNNING");
+        assert_eq!(format!("{}", DaemonState::READY), "READY");
+        assert_eq!(format!("{}", DaemonState::STOPPED), "STOPPED");
+        assert_eq!(format!("{}", DaemonState::UNKNOWN), "UNKNOWN");
+    }
+
+    #[test]
+    fn test_daemon_state_debug() {
+        assert_eq!(format!("{:?}", DaemonState::INIT), "INIT");
+        assert_eq!(format!("{:?}", DaemonState::RUNNING), "RUNNING");
+    }
+
+    #[test]
+    fn test_daemon_state_from_boundary_values() {
+        assert_eq!(DaemonState::from(0), DaemonState::UNKNOWN);
+        assert_eq!(DaemonState::from(-1), DaemonState::UNKNOWN);
+        assert_eq!(DaemonState::from(i32::MAX), DaemonState::UNKNOWN);
+        assert_eq!(DaemonState::from(i32::MIN), DaemonState::UNKNOWN);
+        assert_eq!(DaemonState::from(6), DaemonState::UNKNOWN);
+    }
+
+    #[test]
+    fn test_daemon_state_equality() {
+        assert_eq!(DaemonState::INIT, DaemonState::INIT);
+        assert_ne!(DaemonState::INIT, DaemonState::RUNNING);
+        assert_ne!(DaemonState::READY, DaemonState::STOPPED);
+    }
+
+    #[test]
+    fn test_daemon_controller_new() {
+        let controller = DaemonController::new();
+        assert!(controller.is_active());
+        assert!(controller.get_blob_cache_mgr().is_none());
+        assert!(controller.get_fs_service().is_none());
+    }
+
+    #[test]
+    fn test_daemon_controller_default() {
+        let controller = DaemonController::default();
+        assert!(controller.is_active());
+    }
+
+    #[test]
+    fn test_daemon_controller_alloc_waker() {
+        let controller = DaemonController::new();
+        let waker = controller.alloc_waker();
+        // Waker should be shareable
+        let _waker2 = waker.clone();
+    }
+
+    #[test]
+    fn test_daemon_controller_singleton_mode() {
+        let controller = DaemonController::new();
+        controller.set_singleton_mode(true);
+        controller.set_singleton_mode(false);
+    }
+
+    #[test]
+    fn test_daemon_controller_notify_shutdown() {
+        let controller = DaemonController::new();
+        assert!(controller.is_active());
+        controller.notify_shutdown();
+        assert!(!controller.is_active());
+    }
+
+    #[test]
+    fn test_daemon_controller_blob_cache_mgr() {
+        let controller = DaemonController::new();
+        assert!(controller.get_blob_cache_mgr().is_none());
+
+        let mgr = Arc::new(BlobCacheMgr::new());
+        let old = controller.set_blob_cache_mgr(mgr);
+        assert!(old.is_none());
+        assert!(controller.get_blob_cache_mgr().is_some());
+    }
+
+    #[test]
+    fn test_daemon_info_serialization() {
+        let info = DaemonInfo {
+            version: BuildTimeInfo {
+                package_ver: "1.0.0".to_string(),
+                git_commit: "abc123".to_string(),
+                build_time: "2024-01-01".to_string(),
+                profile: "release".to_string(),
+                rustc: "1.75.0".to_string(),
+            },
+            id: Some("test-daemon".to_string()),
+            supervisor: None,
+            state: DaemonState::RUNNING,
+            backend_collection: None,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("test-daemon"));
+        assert!(json.contains("RUNNING"));
+        assert!(json.contains("1.0.0"));
+    }
 }
