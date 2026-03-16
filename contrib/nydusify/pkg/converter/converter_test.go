@@ -25,6 +25,41 @@ import (
 	"github.com/dragonflyoss/nydus/contrib/nydusify/pkg/snapshotter/external"
 )
 
+// Package-level function variables used by persistent gomonkey patches
+// applied in init(). Individual tests set these variables to control mock
+// behavior. This avoids repeated patch/reset cycles across test functions
+// that are unreliable on ARM64 due to instruction cache flush issues.
+var (
+	defaultRemoteFunc    func(string, bool) (*remote.Remote, error)
+	newHandlerFunc       func(modctl.Option) (*modctl.Handler, error)
+	newRemoteHandlerFunc func(context.Context, string, bool) (*modctl.RemoteHandler, error)
+)
+
+func init() {
+	// Permanently patch functions that are patched across multiple test
+	// functions AND never need real behavior in any test. Without this,
+	// Reset() in one test corrupts the function prologue on ARM64,
+	// causing crashes in subsequent tests or iterations.
+	gomonkey.ApplyFunc(pkgPvd.DefaultRemote, func(ref string, insecure bool) (*remote.Remote, error) {
+		if defaultRemoteFunc != nil {
+			return defaultRemoteFunc(ref, insecure)
+		}
+		return nil, errors.New("DefaultRemote not mocked for this test")
+	})
+	gomonkey.ApplyFunc(modctl.NewHandler, func(opt modctl.Option) (*modctl.Handler, error) {
+		if newHandlerFunc != nil {
+			return newHandlerFunc(opt)
+		}
+		return nil, errors.New("modctl.NewHandler not mocked for this test")
+	})
+	gomonkey.ApplyFunc(modctl.NewRemoteHandler, func(ctx context.Context, ref string, http bool) (*modctl.RemoteHandler, error) {
+		if newRemoteHandlerFunc != nil {
+			return newRemoteHandlerFunc(ctx, ref, http)
+		}
+		return nil, errors.New("modctl.NewRemoteHandler not mocked for this test")
+	})
+}
+
 func TestConvert(t *testing.T) {
 	t.Run("convert modelfile", func(t *testing.T) {
 		opt := Opt{
@@ -53,294 +88,9 @@ func TestConvert(t *testing.T) {
 	})
 }
 
-func TestConvertModelFile(t *testing.T) {
-	opt := Opt{
-		WorkDir:             "/tmp/nydusify",
-		SourceBackendConfig: "{}",
-		Source:              "docker.io/library/busybox:latest",
-		Target:              "docker.io/library/busybox:latest_nydus",
-		ChunkSize:           "0x100000",
-	}
-	t.Run("Run normal", func(t *testing.T) {
-		patches := gomonkey.ApplyFunc(modctl.NewHandler, func(modctl.Option) (*modctl.Handler, error) {
-			return &modctl.Handler{}, nil
-		})
-		defer patches.Reset()
-		extHandlePatches := gomonkey.ApplyFunc(external.Handle, func(context.Context, external.Options) error {
-			return nil
-		})
-		defer extHandlePatches.Reset()
-
-		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
-			return "", nil
-		})
-		defer packFinBootPatches.Reset()
-
-		buildModelConfigPatches := gomonkey.ApplyFunc(buildModelConfig, func(*modctl.Handler) (*modelspec.Model, error) {
-			return &modelspec.Model{}, nil
-		})
-		defer buildModelConfigPatches.Reset()
-
-		pushManifestPatches := gomonkey.ApplyFunc(pushManifest, func(context.Context, Opt, modelspec.Model, []ocispec.Descriptor, parser.Image, string) error {
-			return nil
-		})
-		defer pushManifestPatches.Reset()
-		err := convertModelFile(context.Background(), opt)
-		assert.NoError(t, err)
-	})
-
-	t.Run("Run newModctlHandler failed", func(t *testing.T) {
-		patches := gomonkey.ApplyFunc(modctl.NewHandler, func(modctl.Option) (*modctl.Handler, error) {
-			return nil, errors.New("new handler error")
-		})
-		defer patches.Reset()
-		err := convertModelFile(context.Background(), opt)
-		assert.Error(t, err)
-	})
-
-	t.Run("Run external handle failed", func(t *testing.T) {
-		patches := gomonkey.ApplyFunc(modctl.NewHandler, func(modctl.Option) (*modctl.Handler, error) {
-			return &modctl.Handler{}, nil
-		})
-		defer patches.Reset()
-		extHandlePatches := gomonkey.ApplyFunc(external.Handle, func(context.Context, external.Options) error {
-			return errors.New("external handle mock error")
-		})
-		defer extHandlePatches.Reset()
-		err := convertModelFile(context.Background(), opt)
-		assert.Error(t, err)
-	})
-
-	t.Run("Run packFinalBootstrap failed", func(t *testing.T) {
-		patches := gomonkey.ApplyFunc(modctl.NewHandler, func(modctl.Option) (*modctl.Handler, error) {
-			return &modctl.Handler{}, nil
-		})
-		defer patches.Reset()
-		extHandlePatches := gomonkey.ApplyFunc(external.Handle, func(context.Context, external.Options) error {
-			return nil
-		})
-		defer extHandlePatches.Reset()
-
-		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
-			return "", errors.New("pack final bootstrap mock error")
-		})
-		defer packFinBootPatches.Reset()
-		err := convertModelFile(context.Background(), opt)
-		assert.Error(t, err)
-	})
-
-	t.Run("Run buildModelConfig failed", func(t *testing.T) {
-		patches := gomonkey.ApplyFunc(modctl.NewHandler, func(modctl.Option) (*modctl.Handler, error) {
-			return &modctl.Handler{}, nil
-		})
-		defer patches.Reset()
-		extHandlePatches := gomonkey.ApplyFunc(external.Handle, func(context.Context, external.Options) error {
-			return nil
-		})
-		defer extHandlePatches.Reset()
-
-		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
-			return "", nil
-		})
-		defer packFinBootPatches.Reset()
-
-		buildModelConfigPatches := gomonkey.ApplyFunc(buildModelConfig, func(*modctl.Handler) (*modelspec.Model, error) {
-			return nil, errors.New("buildModelConfig mock error")
-		})
-		defer buildModelConfigPatches.Reset()
-		err := convertModelFile(context.Background(), opt)
-		assert.Error(t, err)
-	})
-
-	t.Run("Run pushManifest failed", func(t *testing.T) {
-		patches := gomonkey.ApplyFunc(modctl.NewHandler, func(modctl.Option) (*modctl.Handler, error) {
-			return &modctl.Handler{}, nil
-		})
-		defer patches.Reset()
-		extHandlePatches := gomonkey.ApplyFunc(external.Handle, func(context.Context, external.Options) error {
-			return nil
-		})
-		defer extHandlePatches.Reset()
-
-		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
-			return "", nil
-		})
-		defer packFinBootPatches.Reset()
-
-		buildModelConfigPatches := gomonkey.ApplyFunc(buildModelConfig, func(*modctl.Handler) (*modelspec.Model, error) {
-			return &modelspec.Model{}, nil
-		})
-		defer buildModelConfigPatches.Reset()
-
-		pushManifestPatches := gomonkey.ApplyFunc(pushManifest, func(context.Context, Opt, modelspec.Model, []ocispec.Descriptor, parser.Image, string) error {
-			return errors.New("pushManifest mock error")
-		})
-		defer pushManifestPatches.Reset()
-		err := convertModelFile(context.Background(), opt)
-		assert.Error(t, err)
-	})
-}
-
-func TestConvertModelArtifact(t *testing.T) {
-	opt := Opt{
-		WorkDir:   "/tmp/nydusify",
-		Source:    "docker.io/library/busybox:latest",
-		Target:    "docker.io/library/busybox:latest_nydus",
-		ChunkSize: "0x100000",
-	}
-
-	t.Run("Run normal", func(t *testing.T) {
-		mockRemoteHandler := &modctl.RemoteHandler{}
-		patches := gomonkey.ApplyFunc(modctl.NewRemoteHandler, func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
-			return mockRemoteHandler, nil
-		})
-		defer patches.Reset()
-		extHandlePatches := gomonkey.ApplyFunc(external.RemoteHandle, func(context.Context, external.Options) error {
-			return nil
-		})
-		defer extHandlePatches.Reset()
-
-		packWithAttributesPatches := gomonkey.ApplyFunc(packWithAttributes, func(context.Context, snapConv.PackOption, string) (digest.Digest, digest.Digest, error) {
-			return "", "", nil
-		})
-		defer packWithAttributesPatches.Reset()
-
-		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
-			return "", nil
-		})
-		defer packFinBootPatches.Reset()
-
-		getModelConfigPaches := gomonkey.ApplyMethod(mockRemoteHandler, "GetModelConfig", func() (*modelspec.Model, error) {
-			return &modelspec.Model{}, nil
-		})
-		defer getModelConfigPaches.Reset()
-
-		pushManifestPatches := gomonkey.ApplyFunc(pushManifest, func(context.Context, Opt, modelspec.Model, []ocispec.Descriptor, parser.Image, string) error {
-			return nil
-		})
-		defer pushManifestPatches.Reset()
-		err := convertModelArtifact(context.Background(), opt)
-		assert.NoError(t, err)
-	})
-
-	t.Run("Run RemoteHandle failed", func(t *testing.T) {
-		patches := gomonkey.ApplyFunc(modctl.NewRemoteHandler, func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
-			return nil, errors.New("remote handler mock error")
-		})
-		defer patches.Reset()
-		err := convertModelArtifact(context.Background(), opt)
-		assert.Error(t, err)
-	})
-
-	t.Run("Run packWithAttributes failed", func(t *testing.T) {
-		mockRemoteHandler := &modctl.RemoteHandler{}
-		patches := gomonkey.ApplyFunc(modctl.NewRemoteHandler, func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
-			return mockRemoteHandler, nil
-		})
-		defer patches.Reset()
-		extHandlePatches := gomonkey.ApplyFunc(external.RemoteHandle, func(context.Context, external.Options) error {
-			return nil
-		})
-		defer extHandlePatches.Reset()
-
-		packWithAttributesPatches := gomonkey.ApplyFunc(packWithAttributes, func(context.Context, snapConv.PackOption, string) (digest.Digest, digest.Digest, error) {
-			return "", "", errors.New("pack with attributes failed mock error")
-		})
-		defer packWithAttributesPatches.Reset()
-		err := convertModelArtifact(context.Background(), opt)
-		assert.Error(t, err)
-	})
-
-	t.Run("Run packFinalBootstrap failed", func(t *testing.T) {
-		mockRemoteHandler := &modctl.RemoteHandler{}
-		patches := gomonkey.ApplyFunc(modctl.NewRemoteHandler, func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
-			return mockRemoteHandler, nil
-		})
-		defer patches.Reset()
-		extHandlePatches := gomonkey.ApplyFunc(external.RemoteHandle, func(context.Context, external.Options) error {
-			return nil
-		})
-		defer extHandlePatches.Reset()
-
-		packWithAttributesPatches := gomonkey.ApplyFunc(packWithAttributes, func(context.Context, snapConv.PackOption, string) (digest.Digest, digest.Digest, error) {
-			return "", "", nil
-		})
-		defer packWithAttributesPatches.Reset()
-
-		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
-			return "", errors.New("packFinalBootstrap mock error")
-		})
-		defer packFinBootPatches.Reset()
-
-		err := convertModelArtifact(context.Background(), opt)
-		assert.Error(t, err)
-	})
-
-	t.Run("Run GetModelConfig failed", func(t *testing.T) {
-		mockRemoteHandler := &modctl.RemoteHandler{}
-		patches := gomonkey.ApplyFunc(modctl.NewRemoteHandler, func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
-			return mockRemoteHandler, nil
-		})
-		defer patches.Reset()
-		extHandlePatches := gomonkey.ApplyFunc(external.RemoteHandle, func(context.Context, external.Options) error {
-			return nil
-		})
-		defer extHandlePatches.Reset()
-
-		packWithAttributesPatches := gomonkey.ApplyFunc(packWithAttributes, func(context.Context, snapConv.PackOption, string) (digest.Digest, digest.Digest, error) {
-			return "", "", nil
-		})
-		defer packWithAttributesPatches.Reset()
-
-		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
-			return "", nil
-		})
-		defer packFinBootPatches.Reset()
-
-		getModelConfigPaches := gomonkey.ApplyMethod(mockRemoteHandler, "GetModelConfig", func() (*modelspec.Model, error) {
-			return nil, errors.New("run getModelConfig mock error")
-		})
-		defer getModelConfigPaches.Reset()
-
-		err := convertModelArtifact(context.Background(), opt)
-		assert.Error(t, err)
-	})
-
-	t.Run("Run pushManifest failed", func(t *testing.T) {
-		mockRemoteHandler := &modctl.RemoteHandler{}
-		patches := gomonkey.ApplyFunc(modctl.NewRemoteHandler, func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
-			return mockRemoteHandler, nil
-		})
-		defer patches.Reset()
-		extHandlePatches := gomonkey.ApplyFunc(external.RemoteHandle, func(context.Context, external.Options) error {
-			return nil
-		})
-		defer extHandlePatches.Reset()
-
-		packWithAttributesPatches := gomonkey.ApplyFunc(packWithAttributes, func(context.Context, snapConv.PackOption, string) (digest.Digest, digest.Digest, error) {
-			return "", "", nil
-		})
-		defer packWithAttributesPatches.Reset()
-
-		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
-			return "", nil
-		})
-		defer packFinBootPatches.Reset()
-
-		getModelConfigPaches := gomonkey.ApplyMethod(mockRemoteHandler, "GetModelConfig", func() (*modelspec.Model, error) {
-			return &modelspec.Model{}, nil
-		})
-		defer getModelConfigPaches.Reset()
-
-		pushManifestPatches := gomonkey.ApplyFunc(pushManifest, func(context.Context, Opt, modelspec.Model, []ocispec.Descriptor, parser.Image, string) error {
-			return errors.New("push manifest mock error")
-		})
-		defer pushManifestPatches.Reset()
-
-		err := convertModelArtifact(context.Background(), opt)
-		assert.Error(t, err)
-	})
-}
+// Tests that call real (non-mocked) functions are placed before
+// TestConvertModelFile/TestConvertModelArtifact which apply per-subtest
+// gomonkey patches that may corrupt function prologues on ARM64.
 
 func TestPackWithAttributes(t *testing.T) {
 	packOpt := snapConv.PackOption{
@@ -436,126 +186,404 @@ func TestBuildModelConfig(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestConvertModelFile(t *testing.T) {
+	opt := Opt{
+		WorkDir:             "/tmp/nydusify",
+		SourceBackendConfig: "{}",
+		Source:              "docker.io/library/busybox:latest",
+		Target:              "docker.io/library/busybox:latest_nydus",
+		ChunkSize:           "0x100000",
+	}
+	t.Run("Run normal", func(t *testing.T) {
+		newHandlerFunc = func(modctl.Option) (*modctl.Handler, error) {
+			return &modctl.Handler{}, nil
+		}
+		defer func() { newHandlerFunc = nil }()
+		extHandlePatches := gomonkey.ApplyFunc(external.Handle, func(context.Context, external.Options) error {
+			return nil
+		})
+		defer extHandlePatches.Reset()
+
+		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
+			return "", nil
+		})
+		defer packFinBootPatches.Reset()
+
+		buildModelConfigPatches := gomonkey.ApplyFunc(buildModelConfig, func(*modctl.Handler) (*modelspec.Model, error) {
+			return &modelspec.Model{}, nil
+		})
+		defer buildModelConfigPatches.Reset()
+
+		pushManifestPatches := gomonkey.ApplyFunc(pushManifest, func(context.Context, Opt, modelspec.Model, []ocispec.Descriptor, parser.Image, string) error {
+			return nil
+		})
+		defer pushManifestPatches.Reset()
+		err := convertModelFile(context.Background(), opt)
+		assert.NoError(t, err)
+	})
+
+	t.Run("Run newModctlHandler failed", func(t *testing.T) {
+		newHandlerFunc = func(modctl.Option) (*modctl.Handler, error) {
+			return nil, errors.New("new handler error")
+		}
+		defer func() { newHandlerFunc = nil }()
+		err := convertModelFile(context.Background(), opt)
+		assert.Error(t, err)
+	})
+
+	t.Run("Run external handle failed", func(t *testing.T) {
+		newHandlerFunc = func(modctl.Option) (*modctl.Handler, error) {
+			return &modctl.Handler{}, nil
+		}
+		defer func() { newHandlerFunc = nil }()
+		extHandlePatches := gomonkey.ApplyFunc(external.Handle, func(context.Context, external.Options) error {
+			return errors.New("external handle mock error")
+		})
+		defer extHandlePatches.Reset()
+		err := convertModelFile(context.Background(), opt)
+		assert.Error(t, err)
+	})
+
+	t.Run("Run packFinalBootstrap failed", func(t *testing.T) {
+		newHandlerFunc = func(modctl.Option) (*modctl.Handler, error) {
+			return &modctl.Handler{}, nil
+		}
+		defer func() { newHandlerFunc = nil }()
+		extHandlePatches := gomonkey.ApplyFunc(external.Handle, func(context.Context, external.Options) error {
+			return nil
+		})
+		defer extHandlePatches.Reset()
+
+		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
+			return "", errors.New("pack final bootstrap mock error")
+		})
+		defer packFinBootPatches.Reset()
+		err := convertModelFile(context.Background(), opt)
+		assert.Error(t, err)
+	})
+
+	t.Run("Run buildModelConfig failed", func(t *testing.T) {
+		newHandlerFunc = func(modctl.Option) (*modctl.Handler, error) {
+			return &modctl.Handler{}, nil
+		}
+		defer func() { newHandlerFunc = nil }()
+		extHandlePatches := gomonkey.ApplyFunc(external.Handle, func(context.Context, external.Options) error {
+			return nil
+		})
+		defer extHandlePatches.Reset()
+
+		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
+			return "", nil
+		})
+		defer packFinBootPatches.Reset()
+
+		buildModelConfigPatches := gomonkey.ApplyFunc(buildModelConfig, func(*modctl.Handler) (*modelspec.Model, error) {
+			return nil, errors.New("buildModelConfig mock error")
+		})
+		defer buildModelConfigPatches.Reset()
+		err := convertModelFile(context.Background(), opt)
+		assert.Error(t, err)
+	})
+
+	t.Run("Run pushManifest failed", func(t *testing.T) {
+		newHandlerFunc = func(modctl.Option) (*modctl.Handler, error) {
+			return &modctl.Handler{}, nil
+		}
+		defer func() { newHandlerFunc = nil }()
+		extHandlePatches := gomonkey.ApplyFunc(external.Handle, func(context.Context, external.Options) error {
+			return nil
+		})
+		defer extHandlePatches.Reset()
+
+		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
+			return "", nil
+		})
+		defer packFinBootPatches.Reset()
+
+		buildModelConfigPatches := gomonkey.ApplyFunc(buildModelConfig, func(*modctl.Handler) (*modelspec.Model, error) {
+			return &modelspec.Model{}, nil
+		})
+		defer buildModelConfigPatches.Reset()
+
+		pushManifestPatches := gomonkey.ApplyFunc(pushManifest, func(context.Context, Opt, modelspec.Model, []ocispec.Descriptor, parser.Image, string) error {
+			return errors.New("pushManifest mock error")
+		})
+		defer pushManifestPatches.Reset()
+		err := convertModelFile(context.Background(), opt)
+		assert.Error(t, err)
+	})
+}
+
+func TestConvertModelArtifact(t *testing.T) {
+	opt := Opt{
+		WorkDir:   "/tmp/nydusify",
+		Source:    "docker.io/library/busybox:latest",
+		Target:    "docker.io/library/busybox:latest_nydus",
+		ChunkSize: "0x100000",
+	}
+
+	t.Run("Run normal", func(t *testing.T) {
+		mockRemoteHandler := &modctl.RemoteHandler{}
+		newRemoteHandlerFunc = func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
+			return mockRemoteHandler, nil
+		}
+		defer func() { newRemoteHandlerFunc = nil }()
+		extHandlePatches := gomonkey.ApplyFunc(external.RemoteHandle, func(context.Context, external.Options) error {
+			return nil
+		})
+		defer extHandlePatches.Reset()
+
+		packWithAttributesPatches := gomonkey.ApplyFunc(packWithAttributes, func(context.Context, snapConv.PackOption, string) (digest.Digest, digest.Digest, error) {
+			return "", "", nil
+		})
+		defer packWithAttributesPatches.Reset()
+
+		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
+			return "", nil
+		})
+		defer packFinBootPatches.Reset()
+
+		getModelConfigPaches := gomonkey.ApplyMethod(mockRemoteHandler, "GetModelConfig", func() (*modelspec.Model, error) {
+			return &modelspec.Model{}, nil
+		})
+		defer getModelConfigPaches.Reset()
+
+		pushManifestPatches := gomonkey.ApplyFunc(pushManifest, func(context.Context, Opt, modelspec.Model, []ocispec.Descriptor, parser.Image, string) error {
+			return nil
+		})
+		defer pushManifestPatches.Reset()
+		err := convertModelArtifact(context.Background(), opt)
+		assert.NoError(t, err)
+	})
+
+	t.Run("Run RemoteHandle failed", func(t *testing.T) {
+		newRemoteHandlerFunc = func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
+			return nil, errors.New("remote handler mock error")
+		}
+		defer func() { newRemoteHandlerFunc = nil }()
+		err := convertModelArtifact(context.Background(), opt)
+		assert.Error(t, err)
+	})
+
+	t.Run("Run packWithAttributes failed", func(t *testing.T) {
+		mockRemoteHandler := &modctl.RemoteHandler{}
+		newRemoteHandlerFunc = func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
+			return mockRemoteHandler, nil
+		}
+		defer func() { newRemoteHandlerFunc = nil }()
+		extHandlePatches := gomonkey.ApplyFunc(external.RemoteHandle, func(context.Context, external.Options) error {
+			return nil
+		})
+		defer extHandlePatches.Reset()
+
+		packWithAttributesPatches := gomonkey.ApplyFunc(packWithAttributes, func(context.Context, snapConv.PackOption, string) (digest.Digest, digest.Digest, error) {
+			return "", "", errors.New("pack with attributes failed mock error")
+		})
+		defer packWithAttributesPatches.Reset()
+		err := convertModelArtifact(context.Background(), opt)
+		assert.Error(t, err)
+	})
+
+	t.Run("Run packFinalBootstrap failed", func(t *testing.T) {
+		mockRemoteHandler := &modctl.RemoteHandler{}
+		newRemoteHandlerFunc = func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
+			return mockRemoteHandler, nil
+		}
+		defer func() { newRemoteHandlerFunc = nil }()
+		extHandlePatches := gomonkey.ApplyFunc(external.RemoteHandle, func(context.Context, external.Options) error {
+			return nil
+		})
+		defer extHandlePatches.Reset()
+
+		packWithAttributesPatches := gomonkey.ApplyFunc(packWithAttributes, func(context.Context, snapConv.PackOption, string) (digest.Digest, digest.Digest, error) {
+			return "", "", nil
+		})
+		defer packWithAttributesPatches.Reset()
+
+		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
+			return "", errors.New("packFinalBootstrap mock error")
+		})
+		defer packFinBootPatches.Reset()
+
+		err := convertModelArtifact(context.Background(), opt)
+		assert.Error(t, err)
+	})
+
+	t.Run("Run GetModelConfig failed", func(t *testing.T) {
+		mockRemoteHandler := &modctl.RemoteHandler{}
+		newRemoteHandlerFunc = func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
+			return mockRemoteHandler, nil
+		}
+		defer func() { newRemoteHandlerFunc = nil }()
+		extHandlePatches := gomonkey.ApplyFunc(external.RemoteHandle, func(context.Context, external.Options) error {
+			return nil
+		})
+		defer extHandlePatches.Reset()
+
+		packWithAttributesPatches := gomonkey.ApplyFunc(packWithAttributes, func(context.Context, snapConv.PackOption, string) (digest.Digest, digest.Digest, error) {
+			return "", "", nil
+		})
+		defer packWithAttributesPatches.Reset()
+
+		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
+			return "", nil
+		})
+		defer packFinBootPatches.Reset()
+
+		getModelConfigPaches := gomonkey.ApplyMethod(mockRemoteHandler, "GetModelConfig", func() (*modelspec.Model, error) {
+			return nil, errors.New("run getModelConfig mock error")
+		})
+		defer getModelConfigPaches.Reset()
+
+		err := convertModelArtifact(context.Background(), opt)
+		assert.Error(t, err)
+	})
+
+	t.Run("Run pushManifest failed", func(t *testing.T) {
+		mockRemoteHandler := &modctl.RemoteHandler{}
+		newRemoteHandlerFunc = func(context.Context, string, bool) (*modctl.RemoteHandler, error) {
+			return mockRemoteHandler, nil
+		}
+		defer func() { newRemoteHandlerFunc = nil }()
+		extHandlePatches := gomonkey.ApplyFunc(external.RemoteHandle, func(context.Context, external.Options) error {
+			return nil
+		})
+		defer extHandlePatches.Reset()
+
+		packWithAttributesPatches := gomonkey.ApplyFunc(packWithAttributes, func(context.Context, snapConv.PackOption, string) (digest.Digest, digest.Digest, error) {
+			return "", "", nil
+		})
+		defer packWithAttributesPatches.Reset()
+
+		packFinBootPatches := gomonkey.ApplyFunc(packFinalBootstrap, func(string, string, digest.Digest) (string, error) {
+			return "", nil
+		})
+		defer packFinBootPatches.Reset()
+
+		getModelConfigPaches := gomonkey.ApplyMethod(mockRemoteHandler, "GetModelConfig", func() (*modelspec.Model, error) {
+			return &modelspec.Model{}, nil
+		})
+		defer getModelConfigPaches.Reset()
+
+		pushManifestPatches := gomonkey.ApplyFunc(pushManifest, func(context.Context, Opt, modelspec.Model, []ocispec.Descriptor, parser.Image, string) error {
+			return errors.New("push manifest mock error")
+		})
+		defer pushManifestPatches.Reset()
+
+		err := convertModelArtifact(context.Background(), opt)
+		assert.Error(t, err)
+	})
+}
+
 func TestPushManifest(t *testing.T) {
 	remoter := &remote.Remote{}
+
+	// Apply single persistent patches at function level to avoid repeated
+	// patch/reset cycles that are unreliable on ARM64. DefaultRemote uses
+	// the package-level persistent patch (see init()).
+	var makeDescFunc func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error)
+	makeDescPatches := gomonkey.ApplyFunc(makeDesc, func(v interface{}, d ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
+		return makeDescFunc(v, d)
+	})
+	defer makeDescPatches.Reset()
+
+	var pushFunc func(*remote.Remote, context.Context, ocispec.Descriptor, bool, io.Reader) error
+	pushPatches := gomonkey.ApplyMethod(remoter, "Push", func(r *remote.Remote, ctx context.Context, desc ocispec.Descriptor, b bool, reader io.Reader) error {
+		return pushFunc(r, ctx, desc, b, reader)
+	})
+	defer pushPatches.Reset()
+
+	var getSubjectFunc func(context.Context, string, bool, bool) (*ocispec.Descriptor, error)
+	getSubjectPatches := gomonkey.ApplyFunc(getSourceManifestSubject, func(ctx context.Context, s string, b1 bool, b2 bool) (*ocispec.Descriptor, error) {
+		return getSubjectFunc(ctx, s, b1, b2)
+	})
+	defer getSubjectPatches.Reset()
+
 	t.Run("Run make desc failed", func(t *testing.T) {
-		makeDescPatches := gomonkey.ApplyFunc(makeDesc, func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
+		makeDescFunc = func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
 			return nil, nil, errors.New("make desc mock error")
-		})
-		defer makeDescPatches.Reset()
+		}
 		err := pushManifest(context.Background(), Opt{}, modelspec.Model{}, nil, parser.Image{}, "")
 		assert.Error(t, err)
 	})
 
 	t.Run("Run default remote failed", func(t *testing.T) {
-		makeDescPatches := gomonkey.ApplyFunc(makeDesc, func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
+		makeDescFunc = func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
 			return []byte{}, &ocispec.Descriptor{}, nil
-		})
-		defer makeDescPatches.Reset()
-
-		defaultRemotePatches := gomonkey.ApplyFunc(pkgPvd.DefaultRemote, func(string, bool) (*remote.Remote, error) {
+		}
+		defaultRemoteFunc = func(string, bool) (*remote.Remote, error) {
 			return nil, errors.New("default remote failed mock error")
-		})
-		defer defaultRemotePatches.Reset()
+		}
 		err := pushManifest(context.Background(), Opt{}, modelspec.Model{}, nil, parser.Image{}, "")
 		assert.Error(t, err)
 	})
 
 	t.Run("Run push failed", func(t *testing.T) {
-		makeDescPatches := gomonkey.ApplyFunc(makeDesc, func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
+		makeDescFunc = func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
 			return []byte{}, &ocispec.Descriptor{}, nil
-		})
-		defer makeDescPatches.Reset()
-
-		defaultRemotePatches := gomonkey.ApplyFunc(pkgPvd.DefaultRemote, func(string, bool) (*remote.Remote, error) {
+		}
+		defaultRemoteFunc = func(string, bool) (*remote.Remote, error) {
 			return remoter, nil
-		})
-		defer defaultRemotePatches.Reset()
-
-		pushPatches := gomonkey.ApplyMethod(remoter, "Push", func(*remote.Remote, context.Context, ocispec.Descriptor, bool, io.Reader) error {
+		}
+		pushFunc = func(*remote.Remote, context.Context, ocispec.Descriptor, bool, io.Reader) error {
 			return errors.New("push mock timeout error")
-		})
-		defer pushPatches.Reset()
+		}
 		err := pushManifest(context.Background(), Opt{WithPlainHTTP: true}, modelspec.Model{}, nil, parser.Image{}, "")
 		assert.Error(t, err)
 	})
 
 	t.Run("Run open failed", func(t *testing.T) {
-		makeDescPatches := gomonkey.ApplyFunc(makeDesc, func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
+		makeDescFunc = func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
 			return []byte{}, &ocispec.Descriptor{}, nil
-		})
-		defer makeDescPatches.Reset()
-
-		defaultRemotePatches := gomonkey.ApplyFunc(pkgPvd.DefaultRemote, func(string, bool) (*remote.Remote, error) {
+		}
+		defaultRemoteFunc = func(string, bool) (*remote.Remote, error) {
 			return remoter, nil
-		})
-		defer defaultRemotePatches.Reset()
-
-		pushPatches := gomonkey.ApplyMethod(remoter, "Push", func(*remote.Remote, context.Context, ocispec.Descriptor, bool, io.Reader) error {
+		}
+		pushFunc = func(*remote.Remote, context.Context, ocispec.Descriptor, bool, io.Reader) error {
 			return nil
-		})
-		defer pushPatches.Reset()
-
+		}
 		err := pushManifest(context.Background(), Opt{WithPlainHTTP: true}, modelspec.Model{}, nil, parser.Image{}, "")
 		assert.Error(t, err)
 	})
 
 	t.Run("Run getSourceManifestSubject failed", func(t *testing.T) {
-		makeDescPatches := gomonkey.ApplyFunc(makeDesc, func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
+		makeDescFunc = func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
 			return []byte{}, &ocispec.Descriptor{}, nil
-		})
-		defer makeDescPatches.Reset()
-
-		defaultRemotePatches := gomonkey.ApplyFunc(pkgPvd.DefaultRemote, func(string, bool) (*remote.Remote, error) {
+		}
+		defaultRemoteFunc = func(string, bool) (*remote.Remote, error) {
 			return remoter, nil
-		})
-		defer defaultRemotePatches.Reset()
-
-		pushPatches := gomonkey.ApplyMethod(remoter, "Push", func(*remote.Remote, context.Context, ocispec.Descriptor, bool, io.Reader) error {
+		}
+		pushFunc = func(*remote.Remote, context.Context, ocispec.Descriptor, bool, io.Reader) error {
 			return nil
-		})
-		defer pushPatches.Reset()
+		}
 
-		bootstrapPath := "/tmp/nydusify/bootstrap"
-		os.Mkdir("/tmp/nydusify/", 0755)
+		bootstrapPath := filepath.Join(t.TempDir(), "bootstrap")
 		os.Create(bootstrapPath)
-		defer os.RemoveAll("/tmp/nydusify/")
-		defer os.Remove(bootstrapPath)
 
-		getSourceManifestSubjectPatches := gomonkey.ApplyFunc(getSourceManifestSubject, func(context.Context, string, bool, bool) (*ocispec.Descriptor, error) {
+		getSubjectFunc = func(context.Context, string, bool, bool) (*ocispec.Descriptor, error) {
 			return nil, errors.New("get source manifest subject mock error")
-		})
-		defer getSourceManifestSubjectPatches.Reset()
+		}
 		err := pushManifest(context.Background(), Opt{WithPlainHTTP: true}, modelspec.Model{}, nil, parser.Image{}, bootstrapPath)
 		assert.Error(t, err)
 	})
 
 	t.Run("Run normal", func(t *testing.T) {
-		makeDescPatches := gomonkey.ApplyFunc(makeDesc, func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
+		makeDescFunc = func(interface{}, ocispec.Descriptor) ([]byte, *ocispec.Descriptor, error) {
 			return []byte{}, &ocispec.Descriptor{}, nil
-		})
-		defer makeDescPatches.Reset()
-
-		defaultRemotePatches := gomonkey.ApplyFunc(pkgPvd.DefaultRemote, func(string, bool) (*remote.Remote, error) {
+		}
+		defaultRemoteFunc = func(string, bool) (*remote.Remote, error) {
 			return remoter, nil
-		})
-		defer defaultRemotePatches.Reset()
-
-		pushPatches := gomonkey.ApplyMethod(remoter, "Push", func(*remote.Remote, context.Context, ocispec.Descriptor, bool, io.Reader) error {
+		}
+		pushFunc = func(*remote.Remote, context.Context, ocispec.Descriptor, bool, io.Reader) error {
 			return nil
-		})
-		defer pushPatches.Reset()
+		}
 
-		bootstrapPath := "/tmp/nydusify/bootstrap"
-		os.Mkdir("/tmp/nydusify/", 0755)
+		bootstrapPath := filepath.Join(t.TempDir(), "bootstrap")
 		os.Create(bootstrapPath)
-		defer os.RemoveAll("/tmp/nydusify/")
-		defer os.Remove(bootstrapPath)
 
-		getSourceManifestSubjectPatches := gomonkey.ApplyFunc(getSourceManifestSubject, func(context.Context, string, bool, bool) (*ocispec.Descriptor, error) {
+		getSubjectFunc = func(context.Context, string, bool, bool) (*ocispec.Descriptor, error) {
 			return &ocispec.Descriptor{}, nil
-		})
-		defer getSourceManifestSubjectPatches.Reset()
+		}
 		err := pushManifest(context.Background(), Opt{WithPlainHTTP: true}, modelspec.Model{}, nil, parser.Image{}, bootstrapPath)
 		assert.NoError(t, err)
 	})
@@ -563,39 +591,44 @@ func TestPushManifest(t *testing.T) {
 
 func TestGetSourceManifestSubject(t *testing.T) {
 	remoter := &remote.Remote{}
-	t.Run("Run default remote failed", func(t *testing.T) {
-		defaultRemotePatches := gomonkey.ApplyFunc(pkgPvd.DefaultRemote, func(string, bool) (*remote.Remote, error) {
-			return nil, errors.New("default remote failed mock error")
+
+	// Apply a single persistent Resolve patch to avoid repeated
+	// patch/reset cycles that are unreliable on ARM64.
+	var resolveFunc func(context.Context) (*ocispec.Descriptor, error)
+	resolvePatches := gomonkey.ApplyMethod(remoter, "Resolve",
+		func(_ *remote.Remote, ctx context.Context) (*ocispec.Descriptor, error) {
+			return resolveFunc(ctx)
 		})
-		defer defaultRemotePatches.Reset()
+	defer resolvePatches.Reset()
+
+	t.Run("Run default remote failed", func(t *testing.T) {
+		defaultRemoteFunc = func(string, bool) (*remote.Remote, error) {
+			return nil, errors.New("default remote failed mock error")
+		}
 		_, err := getSourceManifestSubject(context.Background(), "", false, false)
 		assert.Error(t, err)
 	})
 
 	t.Run("Run resolve failed", func(t *testing.T) {
-		defaultRemotePatches := gomonkey.ApplyFunc(pkgPvd.DefaultRemote, func(string, bool) (*remote.Remote, error) {
+		defaultRemoteFunc = func(string, bool) (*remote.Remote, error) {
 			return remoter, nil
-		})
-		defer defaultRemotePatches.Reset()
+		}
 
-		remoterReolvePatches := gomonkey.ApplyMethod(remoter, "Resolve", func(*remote.Remote, context.Context) (*ocispec.Descriptor, error) {
+		resolveFunc = func(_ context.Context) (*ocispec.Descriptor, error) {
 			return nil, errors.New("resolve failed mock error timeout")
-		})
-		defer remoterReolvePatches.Reset()
+		}
 		_, err := getSourceManifestSubject(context.Background(), "", false, false)
 		assert.Error(t, err)
 	})
 
 	t.Run("Run normal", func(t *testing.T) {
-		defaultRemotePatches := gomonkey.ApplyFunc(pkgPvd.DefaultRemote, func(string, bool) (*remote.Remote, error) {
+		defaultRemoteFunc = func(string, bool) (*remote.Remote, error) {
 			return remoter, nil
-		})
-		defer defaultRemotePatches.Reset()
+		}
 
-		remoterReolvePatches := gomonkey.ApplyMethod(remoter, "Resolve", func(*remote.Remote, context.Context) (*ocispec.Descriptor, error) {
+		resolveFunc = func(_ context.Context) (*ocispec.Descriptor, error) {
 			return &ocispec.Descriptor{}, nil
-		})
-		defer remoterReolvePatches.Reset()
+		}
 		desc, err := getSourceManifestSubject(context.Background(), "", false, false)
 		assert.NoError(t, err)
 		assert.NotNil(t, desc)

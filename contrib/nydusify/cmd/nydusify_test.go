@@ -10,9 +10,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/agiledragon/gomonkey/v2"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -350,46 +350,66 @@ func TestGetGlobalFlags(t *testing.T) {
 	require.Equal(t, 3, len(flags))
 }
 
-func TestSetupLogLevelWithLogFile(t *testing.T) {
-	logFilePath := "test_log_file.log"
-	defer os.Remove(logFilePath)
+// TestSetupLogLevel tests setupLogLevel using real cli.Context objects
+// with proper flag sets, avoiding gomonkey patches that are unreliable
+// on ARM64.
+func TestSetupLogLevel(t *testing.T) {
+	originalLevel := logrus.GetLevel()
+	originalOutput := logrus.StandardLogger().Out
+	defer func() {
+		logrus.SetLevel(originalLevel)
+		logrus.SetOutput(originalOutput)
+	}()
 
-	c := &cli.Context{}
+	t.Run("with log file", func(t *testing.T) {
+		logFilePath := filepath.Join(t.TempDir(), "test_log_file.log")
 
-	patches := gomonkey.ApplyMethodSeq(c, "String", []gomonkey.OutputCell{
-		{Values: []interface{}{"info"}, Times: 1},
-		{Values: []interface{}{"test_log_file.log"}, Times: 2},
+		app := &cli.App{
+			Flags: []cli.Flag{
+				&cli.BoolFlag{Name: "D", Value: false},
+				&cli.StringFlag{Name: "log-level", Value: "info"},
+				&cli.StringFlag{Name: "log-file", Value: ""},
+			},
+		}
+		flagSet := flag.NewFlagSet("log-test", flag.PanicOnError)
+		flagSet.String("log-level", "info", "")
+		flagSet.String("log-file", logFilePath, "")
+		ctx := cli.NewContext(app, flagSet, nil)
+
+		setupLogLevel(ctx)
+
+		file, err := os.Open(logFilePath)
+		assert.NoError(t, err)
+		assert.NotNil(t, file)
+		file.Close()
+
+		logrusOutput := logrus.StandardLogger().Out
+		assert.NotNil(t, logrusOutput)
+
+		logrus.Info("This is a test log message")
+		content, err := os.ReadFile(logFilePath)
+		assert.NoError(t, err)
+		assert.Contains(t, string(content), "This is a test log message")
 	})
-	defer patches.Reset()
-	setupLogLevel(c)
 
-	file, err := os.Open(logFilePath)
-	assert.NoError(t, err)
-	assert.NotNil(t, file)
-	file.Close()
+	t.Run("with invalid log file", func(t *testing.T) {
+		app := &cli.App{
+			Flags: []cli.Flag{
+				&cli.BoolFlag{Name: "D", Value: false},
+				&cli.StringFlag{Name: "log-level", Value: "info"},
+				&cli.StringFlag{Name: "log-file", Value: ""},
+			},
+		}
+		flagSet := flag.NewFlagSet("log-test-invalid", flag.PanicOnError)
+		flagSet.String("log-level", "info", "")
+		flagSet.String("log-file", "test/test_log_file.log", "")
+		ctx := cli.NewContext(app, flagSet, nil)
 
-	logrusOutput := logrus.StandardLogger().Out
-	assert.NotNil(t, logrusOutput)
+		setupLogLevel(ctx)
 
-	logrus.Info("This is a test log message")
-	content, err := os.ReadFile(logFilePath)
-	assert.NoError(t, err)
-	assert.Contains(t, string(content), "This is a test log message")
-}
-
-func TestSetupLogLevelWithInvalidLogFile(t *testing.T) {
-
-	c := &cli.Context{}
-
-	patches := gomonkey.ApplyMethodSeq(c, "String", []gomonkey.OutputCell{
-		{Values: []interface{}{"info"}, Times: 1},
-		{Values: []interface{}{"test/test_log_file.log"}, Times: 2},
+		logrusOutput := logrus.StandardLogger().Out
+		assert.NotNil(t, logrusOutput)
 	})
-	defer patches.Reset()
-	setupLogLevel(c)
-
-	logrusOutput := logrus.StandardLogger().Out
-	assert.NotNil(t, logrusOutput)
 }
 
 func TestValidateSourceAndTargetArchives(t *testing.T) {

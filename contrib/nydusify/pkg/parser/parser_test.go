@@ -5,9 +5,15 @@
 package parser
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
 	"testing"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/containerd/containerd/v2/core/images"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/require"
@@ -15,6 +21,31 @@ import (
 	"github.com/dragonflyoss/nydus/contrib/nydusify/pkg/remote"
 	"github.com/dragonflyoss/nydus/contrib/nydusify/pkg/utils"
 )
+
+// Global gomonkey patches applied once in TestMain to avoid repeated
+// patch/reset cycles on the same method, which are unreliable on ARM64.
+var (
+	testPullFunc    func(context.Context, ocispec.Descriptor, bool) (io.ReadCloser, error)
+	testResolveFunc func(context.Context) (*ocispec.Descriptor, error)
+)
+
+func TestMain(m *testing.M) {
+	r := &remote.Remote{}
+	pullPatches := gomonkey.ApplyMethod(r, "Pull",
+		func(_ *remote.Remote, ctx context.Context, desc ocispec.Descriptor, byDigest bool) (io.ReadCloser, error) {
+			return testPullFunc(ctx, desc, byDigest)
+		})
+	resolvePatches := gomonkey.ApplyMethod(r, "Resolve",
+		func(_ *remote.Remote, ctx context.Context) (*ocispec.Descriptor, error) {
+			return testResolveFunc(ctx)
+		})
+
+	code := m.Run()
+
+	pullPatches.Reset()
+	resolvePatches.Reset()
+	os.Exit(code)
+}
 
 func TestFindNydusBootstrapDescFound(t *testing.T) {
 	manifest := &ocispec.Manifest{
@@ -555,4 +586,553 @@ func TestParserInterestedArchStored(t *testing.T) {
 			require.Equal(t, tt.arch, p.interestedArch)
 		})
 	}
+}
+
+// mockPull mocks Remote.Pull to return JSON-serialized data for the given object.
+func mockPull(pullFunc *func(context.Context, ocispec.Descriptor, bool) (io.ReadCloser, error), obj interface{}) {
+	data, _ := json.Marshal(obj)
+	*pullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(data)), nil
+	}
+}
+
+type failReader struct{}
+
+func (f *failReader) Read(_ []byte) (int, error) {
+	return 0, fmt.Errorf("read error")
+}
+
+// TestPullHelpers consolidates tests for pull, pullManifest, pullConfig, pullIndex.
+// Uses the global testPullFunc set up in TestMain.
+func TestPullHelpers(t *testing.T) {
+	r := &remote.Remote{}
+	p := &Parser{Remote: r, interestedArch: "amd64"}
+
+	t.Run("pull success", func(t *testing.T) {
+		expected := map[string]string{"key": "value"}
+		mockPull(&testPullFunc, expected)
+
+		var result map[string]string
+		err := p.pull(context.Background(), &ocispec.Descriptor{}, &result)
+		require.NoError(t, err)
+		require.Equal(t, "value", result["key"])
+	})
+
+	t.Run("pull remote error", func(t *testing.T) {
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			return nil, fmt.Errorf("connection refused")
+		}
+
+		var result map[string]string
+		err := p.pull(context.Background(), &ocispec.Descriptor{}, &result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "pull image resource")
+	})
+
+	t.Run("pull invalid json", func(t *testing.T) {
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader([]byte("not json"))), nil
+		}
+
+		var result map[string]string
+		err := p.pull(context.Background(), &ocispec.Descriptor{}, &result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unmarshal image resource")
+	})
+
+	t.Run("pull read error", func(t *testing.T) {
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			return io.NopCloser(&failReader{}), nil
+		}
+
+		var result map[string]string
+		err := p.pull(context.Background(), &ocispec.Descriptor{}, &result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "read image resource")
+	})
+
+	t.Run("pullManifest success", func(t *testing.T) {
+		manifest := ocispec.Manifest{
+			MediaType: ocispec.MediaTypeImageManifest,
+			Layers:    []ocispec.Descriptor{{MediaType: ocispec.MediaTypeImageLayerGzip}},
+		}
+		mockPull(&testPullFunc, manifest)
+
+		result, err := p.pullManifest(context.Background(), &ocispec.Descriptor{})
+		require.NoError(t, err)
+		require.Equal(t, ocispec.MediaTypeImageManifest, result.MediaType)
+		require.Len(t, result.Layers, 1)
+	})
+
+	t.Run("pullManifest error", func(t *testing.T) {
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			return nil, fmt.Errorf("network error")
+		}
+
+		_, err := p.pullManifest(context.Background(), &ocispec.Descriptor{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "pull image manifest")
+	})
+
+	t.Run("pullConfig success", func(t *testing.T) {
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "amd64", OS: "linux"},
+		}
+		mockPull(&testPullFunc, config)
+
+		result, err := p.pullConfig(context.Background(), &ocispec.Descriptor{})
+		require.NoError(t, err)
+		require.Equal(t, "amd64", result.Architecture)
+		require.Equal(t, "linux", result.OS)
+	})
+
+	t.Run("pullConfig error", func(t *testing.T) {
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			return nil, fmt.Errorf("network error")
+		}
+
+		_, err := p.pullConfig(context.Background(), &ocispec.Descriptor{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "pull image config")
+	})
+
+	t.Run("pullIndex success", func(t *testing.T) {
+		index := ocispec.Index{
+			Manifests: []ocispec.Descriptor{
+				{MediaType: ocispec.MediaTypeImageManifest},
+				{MediaType: ocispec.MediaTypeImageManifest},
+			},
+		}
+		mockPull(&testPullFunc, index)
+
+		result, err := p.pullIndex(context.Background(), &ocispec.Descriptor{})
+		require.NoError(t, err)
+		require.Len(t, result.Manifests, 2)
+	})
+
+	t.Run("pullIndex error", func(t *testing.T) {
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			return nil, fmt.Errorf("network error")
+		}
+
+		_, err := p.pullIndex(context.Background(), &ocispec.Descriptor{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "pull image index")
+	})
+}
+
+// TestParseImageCases consolidates parseImage tests.
+// Uses the global testPullFunc set up in TestMain.
+func TestParseImageCases(t *testing.T) {
+	r := &remote.Remote{}
+	p := &Parser{Remote: r, interestedArch: "amd64"}
+
+	t.Run("with manifest and config", func(t *testing.T) {
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "amd64", OS: "linux"},
+		}
+		configData, _ := json.Marshal(config)
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(configData)), nil
+		}
+
+		manifest := &ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+			Layers: []ocispec.Descriptor{{MediaType: ocispec.MediaTypeImageLayerGzip}},
+		}
+		desc := &ocispec.Descriptor{MediaType: ocispec.MediaTypeImageManifest}
+
+		img, err := p.parseImage(context.Background(), desc, manifest, false)
+		require.NoError(t, err)
+		require.NotNil(t, img)
+		require.Equal(t, "amd64", img.Config.Architecture)
+		require.Equal(t, "linux", img.Config.OS)
+	})
+
+	t.Run("wrong arch without ignoreArch", func(t *testing.T) {
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "arm64", OS: "linux"},
+		}
+		configData, _ := json.Marshal(config)
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(configData)), nil
+		}
+
+		manifest := &ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+		}
+		desc := &ocispec.Descriptor{MediaType: ocispec.MediaTypeImageManifest}
+
+		_, err := p.parseImage(context.Background(), desc, manifest, false)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Found arch arm64")
+
+		// With ignoreArch, should succeed
+		img, err := p.parseImage(context.Background(), desc, manifest, true)
+		require.NoError(t, err)
+		require.NotNil(t, img)
+	})
+
+	t.Run("missing os and arch", func(t *testing.T) {
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "", OS: ""},
+		}
+		configData, _ := json.Marshal(config)
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(configData)), nil
+		}
+
+		manifest := &ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+		}
+		desc := &ocispec.Descriptor{}
+
+		_, err := p.parseImage(context.Background(), desc, manifest, false)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "does not have os or architecture")
+
+		img, err := p.parseImage(context.Background(), desc, manifest, true)
+		require.NoError(t, err)
+		require.NotNil(t, img)
+	})
+
+	t.Run("pull manifest when not provided", func(t *testing.T) {
+		manifest := ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+		}
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "amd64", OS: "linux"},
+		}
+		manifestData, _ := json.Marshal(manifest)
+		configData, _ := json.Marshal(config)
+
+		callCount := 0
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			callCount++
+			if callCount == 1 {
+				return io.NopCloser(bytes.NewReader(manifestData)), nil
+			}
+			return io.NopCloser(bytes.NewReader(configData)), nil
+		}
+
+		desc := &ocispec.Descriptor{MediaType: ocispec.MediaTypeImageManifest}
+		img, err := p.parseImage(context.Background(), desc, nil, false)
+		require.NoError(t, err)
+		require.NotNil(t, img)
+		require.Equal(t, 2, callCount)
+	})
+
+	t.Run("pull config error", func(t *testing.T) {
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			return nil, fmt.Errorf("config pull failed")
+		}
+
+		manifest := &ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+		}
+		desc := &ocispec.Descriptor{}
+
+		_, err := p.parseImage(context.Background(), desc, manifest, false)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "pull image config")
+	})
+}
+
+// TestParseScenarios consolidates all Parse() tests.
+// Uses the global testPullFunc and testResolveFunc set up in TestMain.
+func TestParseScenarios(t *testing.T) {
+	r := &remote.Remote{}
+	p := &Parser{Remote: r, interestedArch: "amd64"}
+
+	// Helper to set testResolveFunc for a given media type
+	setResolve := func(mediaType string) {
+		switch mediaType {
+		case "error":
+			testResolveFunc = func(_ context.Context) (*ocispec.Descriptor, error) {
+				return nil, fmt.Errorf("resolve failed")
+			}
+		case "x509error":
+			testResolveFunc = func(_ context.Context) (*ocispec.Descriptor, error) {
+				return nil, fmt.Errorf("x509: certificate signed by unknown authority")
+			}
+		default:
+			testResolveFunc = func(_ context.Context) (*ocispec.Descriptor, error) {
+				return &ocispec.Descriptor{MediaType: mediaType}, nil
+			}
+		}
+	}
+
+	t.Run("single OCI manifest", func(t *testing.T) {
+		setResolve(ocispec.MediaTypeImageManifest)
+		manifest := ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+			Layers: []ocispec.Descriptor{
+				{
+					MediaType:   ocispec.MediaTypeImageLayerGzip,
+					Annotations: map[string]string{utils.LayerAnnotationNydusBlob: "true"},
+				},
+			},
+		}
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "amd64", OS: "linux"},
+		}
+		manifestData, _ := json.Marshal(manifest)
+		configData, _ := json.Marshal(config)
+		callCount := 0
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			callCount++
+			if callCount == 1 {
+				return io.NopCloser(bytes.NewReader(manifestData)), nil
+			}
+			return io.NopCloser(bytes.NewReader(configData)), nil
+		}
+
+		parsed, err := p.Parse(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.NotNil(t, parsed.OCIImage)
+		require.Nil(t, parsed.NydusImage)
+	})
+
+	t.Run("single Nydus manifest", func(t *testing.T) {
+		setResolve(ocispec.MediaTypeImageManifest)
+		manifest := ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+			Layers: []ocispec.Descriptor{
+				{
+					MediaType:   ocispec.MediaTypeImageLayerGzip,
+					Annotations: map[string]string{utils.LayerAnnotationNydusBootstrap: "true"},
+				},
+			},
+		}
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "amd64", OS: "linux"},
+		}
+		manifestData, _ := json.Marshal(manifest)
+		configData, _ := json.Marshal(config)
+		callCount := 0
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			callCount++
+			if callCount == 1 {
+				return io.NopCloser(bytes.NewReader(manifestData)), nil
+			}
+			return io.NopCloser(bytes.NewReader(configData)), nil
+		}
+
+		parsed, err := p.Parse(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.Nil(t, parsed.OCIImage)
+		require.NotNil(t, parsed.NydusImage)
+	})
+
+	t.Run("resolve error", func(t *testing.T) {
+		setResolve("error")
+		_, err := p.Parse(context.Background())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "resolve image")
+	})
+
+	t.Run("resolve x509 error", func(t *testing.T) {
+		setResolve("x509error")
+		_, err := p.Parse(context.Background())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "resolve image")
+	})
+
+	t.Run("pull manifest error in parse", func(t *testing.T) {
+		setResolve(ocispec.MediaTypeImageManifest)
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			return nil, fmt.Errorf("pull manifest failed")
+		}
+
+		_, err := p.Parse(context.Background())
+		require.Error(t, err)
+	})
+
+	t.Run("index with OCI image", func(t *testing.T) {
+		setResolve(ocispec.MediaTypeImageIndex)
+		index := ocispec.Index{
+			Manifests: []ocispec.Descriptor{
+				{
+					MediaType: ocispec.MediaTypeImageManifest,
+					Platform:  &ocispec.Platform{OS: "linux", Architecture: "amd64"},
+				},
+			},
+		}
+		manifest := ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+			Layers: []ocispec.Descriptor{{MediaType: ocispec.MediaTypeImageLayerGzip}},
+		}
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "amd64", OS: "linux"},
+		}
+		indexData, _ := json.Marshal(index)
+		manifestData, _ := json.Marshal(manifest)
+		configData, _ := json.Marshal(config)
+		callCount := 0
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return io.NopCloser(bytes.NewReader(indexData)), nil
+			case 2:
+				return io.NopCloser(bytes.NewReader(manifestData)), nil
+			default:
+				return io.NopCloser(bytes.NewReader(configData)), nil
+			}
+		}
+
+		parsed, err := p.Parse(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.NotNil(t, parsed.Index)
+		require.NotNil(t, parsed.OCIImage)
+	})
+
+	t.Run("index with nydus artifact type", func(t *testing.T) {
+		setResolve(ocispec.MediaTypeImageIndex)
+		index := ocispec.Index{
+			Manifests: []ocispec.Descriptor{
+				{
+					MediaType:    ocispec.MediaTypeImageManifest,
+					ArtifactType: utils.ArtifactTypeNydusImageManifest,
+					Platform:     &ocispec.Platform{OS: "linux", Architecture: "amd64"},
+				},
+			},
+		}
+		manifest := ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+			Layers: []ocispec.Descriptor{
+				{
+					MediaType:   ocispec.MediaTypeImageLayerGzip,
+					Annotations: map[string]string{utils.LayerAnnotationNydusBootstrap: "true"},
+				},
+			},
+		}
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "amd64", OS: "linux"},
+		}
+		indexData, _ := json.Marshal(index)
+		manifestData, _ := json.Marshal(manifest)
+		configData, _ := json.Marshal(config)
+		callCount := 0
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return io.NopCloser(bytes.NewReader(indexData)), nil
+			case 2:
+				return io.NopCloser(bytes.NewReader(manifestData)), nil
+			default:
+				return io.NopCloser(bytes.NewReader(configData)), nil
+			}
+		}
+
+		parsed, err := p.Parse(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.NotNil(t, parsed.NydusImage)
+	})
+
+	t.Run("index with no platform", func(t *testing.T) {
+		setResolve(ocispec.MediaTypeImageIndex)
+		index := ocispec.Index{
+			Manifests: []ocispec.Descriptor{
+				{MediaType: ocispec.MediaTypeImageManifest},
+			},
+		}
+		manifest := ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+			Layers: []ocispec.Descriptor{{MediaType: ocispec.MediaTypeImageLayerGzip}},
+		}
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "amd64", OS: "linux"},
+		}
+		indexData, _ := json.Marshal(index)
+		manifestData, _ := json.Marshal(manifest)
+		configData, _ := json.Marshal(config)
+		callCount := 0
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return io.NopCloser(bytes.NewReader(indexData)), nil
+			case 2:
+				return io.NopCloser(bytes.NewReader(manifestData)), nil
+			default:
+				return io.NopCloser(bytes.NewReader(configData)), nil
+			}
+		}
+
+		parsed, err := p.Parse(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.NotNil(t, parsed.OCIImage)
+	})
+
+	t.Run("docker schema2 manifest", func(t *testing.T) {
+		setResolve(images.MediaTypeDockerSchema2Manifest)
+		manifest := ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+			Layers: []ocispec.Descriptor{{MediaType: ocispec.MediaTypeImageLayerGzip}},
+		}
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "amd64", OS: "linux"},
+		}
+		manifestData, _ := json.Marshal(manifest)
+		configData, _ := json.Marshal(config)
+		callCount := 0
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			callCount++
+			if callCount == 1 {
+				return io.NopCloser(bytes.NewReader(manifestData)), nil
+			}
+			return io.NopCloser(bytes.NewReader(configData)), nil
+		}
+
+		parsed, err := p.Parse(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.NotNil(t, parsed.OCIImage)
+	})
+
+	t.Run("docker schema2 manifest list", func(t *testing.T) {
+		setResolve(images.MediaTypeDockerSchema2ManifestList)
+		index := ocispec.Index{
+			Manifests: []ocispec.Descriptor{
+				{
+					MediaType: ocispec.MediaTypeImageManifest,
+					Platform:  &ocispec.Platform{OS: "linux", Architecture: "amd64"},
+				},
+			},
+		}
+		manifest := ocispec.Manifest{
+			Config: ocispec.Descriptor{MediaType: ocispec.MediaTypeImageConfig},
+			Layers: []ocispec.Descriptor{{MediaType: ocispec.MediaTypeImageLayerGzip}},
+		}
+		config := ocispec.Image{
+			Platform: ocispec.Platform{Architecture: "amd64", OS: "linux"},
+		}
+		indexData, _ := json.Marshal(index)
+		manifestData, _ := json.Marshal(manifest)
+		configData, _ := json.Marshal(config)
+		callCount := 0
+		testPullFunc = func(_ context.Context, _ ocispec.Descriptor, _ bool) (io.ReadCloser, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return io.NopCloser(bytes.NewReader(indexData)), nil
+			case 2:
+				return io.NopCloser(bytes.NewReader(manifestData)), nil
+			default:
+				return io.NopCloser(bytes.NewReader(configData)), nil
+			}
+		}
+
+		parsed, err := p.Parse(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.NotNil(t, parsed.Index)
+	})
 }

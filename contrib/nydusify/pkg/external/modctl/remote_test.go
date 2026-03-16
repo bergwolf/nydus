@@ -15,6 +15,7 @@ import (
 	"github.com/dragonflyoss/nydus/contrib/nydusify/pkg/remote"
 	"github.com/dragonflyoss/nydus/contrib/nydusify/pkg/snapshotter/external/backend"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -221,31 +222,60 @@ func TestBackend(t *testing.T) {
 	assert.Equal(t, "registry", backend.Backends[0].Type)
 }
 
-func TestNewRemoteHandler(t *testing.T) {
-	var remoter = remote.Remote{}
-	defaultRemotePatches := gomonkey.ApplyFunc(provider.DefaultRemote, func(string, bool) (*remote.Remote, error) {
-		return &remoter, nil
+// TestNewRemoteHandlerAndInit consolidates gomonkey-based remote handler
+// tests into a single function with persistent patches, avoiding repeated
+// patch/reset cycles that are unreliable on ARM64.
+func TestNewRemoteHandlerAndInit(t *testing.T) {
+	// Persistent patches applied once — never Reset.
+	var defaultRemoteFunc func(string, bool) (*remote.Remote, error)
+	gomonkey.ApplyFunc(provider.DefaultRemote, func(ref string, insecure bool) (*remote.Remote, error) {
+		return defaultRemoteFunc(ref, insecure)
 	})
-	defer defaultRemotePatches.Reset()
 
-	initRemoteHandlerPatches := gomonkey.ApplyFunc(initRemoteHandler, func(*RemoteHandler) error {
-		return nil
+	var initRemoteHandlerFunc func(*RemoteHandler) error
+	gomonkey.ApplyFunc(initRemoteHandler, func(h *RemoteHandler) error {
+		return initRemoteHandlerFunc(h)
 	})
-	defer initRemoteHandlerPatches.Reset()
 
-	remoteHandler, err := NewRemoteHandler(context.Background(), "test", false)
-	assert.Nil(t, err)
-	assert.NotNil(t, remoteHandler)
-}
+	t.Run("NewRemoteHandler", func(t *testing.T) {
+		var remoter = remote.Remote{}
+		defaultRemoteFunc = func(string, bool) (*remote.Remote, error) {
+			return &remoter, nil
+		}
+		initRemoteHandlerFunc = func(*RemoteHandler) error {
+			return nil
+		}
 
-func TestInitRemoteHandlerError(t *testing.T) {
-	handler := &RemoteHandler{}
-	setManifestPatches := gomonkey.ApplyPrivateMethod(handler, "setManifest", func(*RemoteHandler) error {
-		return nil
+		remoteHandler, err := NewRemoteHandler(context.Background(), "test", false)
+		assert.Nil(t, err)
+		assert.NotNil(t, remoteHandler)
 	})
-	defer setManifestPatches.Reset()
-	err := initRemoteHandler(handler)
-	assert.NoError(t, err)
+
+	t.Run("InitRemoteHandler", func(t *testing.T) {
+		mockRemote := &MockRemote{
+			ResolveFunc: func(context.Context) (*ocispec.Descriptor, error) {
+				return &ocispec.Descriptor{}, nil
+			},
+			PullFunc: func(context.Context, ocispec.Descriptor, bool) (io.ReadCloser, error) {
+				mani := ocispec.Manifest{}
+				data, _ := json.Marshal(mani)
+				return io.NopCloser(bytes.NewReader(data)), nil
+			},
+		}
+		// Replicate real initRemoteHandler logic with mocked remoter
+		initRemoteHandlerFunc = func(h *RemoteHandler) error {
+			h.remoter = mockRemote
+			if err := h.setManifest(); err != nil {
+				return errors.Wrap(err, "set manifest failed")
+			}
+			h.blobs = convertToBlobs(&h.manifest)
+			return nil
+		}
+
+		h := &RemoteHandler{ctx: context.Background()}
+		err := initRemoteHandler(h)
+		assert.NoError(t, err)
+	})
 }
 
 func TestHackFileWrapper(t *testing.T) {

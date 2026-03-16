@@ -161,6 +161,42 @@ coverage-codecov:
 	TEST_WORKDIR_PREFIX=$(TEST_WORKDIR_PREFIX) ${RUSTUP} run stable cargo llvm-cov --codecov --output-path codecov.json --workspace $(EXCLUDE_PACKAGES) $(CARGO_COMMON) $(CARGO_BUILD_FLAGS) -- --skip integration --nocapture --test-threads=8
 
 
+CONTRIB_GO_COV_DIR := $(PWD)/coverage/contrib-go
+
+# Run all golang unit tests in contrib directory and collect code coverage.
+# Coverage profiles are written to coverage/contrib-go/ and merged into combined.cov.
+.PHONY: contrib-ut-coverage
+contrib-ut-coverage:
+	@mkdir -p $(CONTRIB_GO_COV_DIR)
+	@echo "Running Go unit tests with coverage for contrib/nydusify..."
+	@cd $(NYDUSIFY_PATH) && go test -buildvcs=false -gcflags=all=-l -covermode=atomic \
+		-coverprofile=$(CONTRIB_GO_COV_DIR)/nydusify.cov \
+		-count=1 -v -timeout 20m -parallel 16 \
+		$$(go list -buildvcs=false ./... | grep -v /vendor/)
+	@echo "Running Go unit tests with coverage for contrib/nydus-overlayfs..."
+	@cd ${NYDUS-OVERLAYFS_PATH} && go test -buildvcs=false -gcflags=all=-l -covermode=atomic \
+		-coverprofile=$(CONTRIB_GO_COV_DIR)/nydus-overlayfs.cov \
+		-count=1 -v -timeout 20m -parallel 16 \
+		$$(go list -buildvcs=false ./... | grep -v /vendor/)
+	@echo "Merging coverage profiles..."
+	@echo "mode: atomic" > $(CONTRIB_GO_COV_DIR)/combined.cov
+	@tail -n +2 $(CONTRIB_GO_COV_DIR)/nydusify.cov >> $(CONTRIB_GO_COV_DIR)/combined.cov 2>/dev/null || true
+	@tail -n +2 $(CONTRIB_GO_COV_DIR)/nydus-overlayfs.cov >> $(CONTRIB_GO_COV_DIR)/combined.cov 2>/dev/null || true
+	@echo "Coverage summary:"
+	@go tool cover -func=$(CONTRIB_GO_COV_DIR)/combined.cov | tail -1
+	@echo "Generating coverage markdown report..."
+	@echo "# Go Unit Test Coverage Report" > $(CONTRIB_GO_COV_DIR)/coverage.md
+	@echo "" >> $(CONTRIB_GO_COV_DIR)/coverage.md
+	@echo "| File | Function | Coverage |" >> $(CONTRIB_GO_COV_DIR)/coverage.md
+	@echo "|------|----------|----------|" >> $(CONTRIB_GO_COV_DIR)/coverage.md
+	@go tool cover -func=$(CONTRIB_GO_COV_DIR)/combined.cov | \
+		sed 's/\t\t*/\t/g' | \
+		awk -F'\t' '{printf "| %s | %s | %s |\n", $$1, $$2, $$3}' \
+		>> $(CONTRIB_GO_COV_DIR)/coverage.md
+	@echo "" >> $(CONTRIB_GO_COV_DIR)/coverage.md
+	@echo "Full coverage profile: $(CONTRIB_GO_COV_DIR)/combined.cov"
+	@echo "Coverage markdown report: $(CONTRIB_GO_COV_DIR)/coverage.md"
+
 contrib-build: nydusify nydus-overlayfs
 
 contrib-release: nydusify-release nydus-overlayfs-release

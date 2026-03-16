@@ -2,6 +2,7 @@ package tool
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 )
 
@@ -173,5 +174,173 @@ func TestBlobInfoListNil(t *testing.T) {
 	s := list.String()
 	if s != "null" {
 		t.Errorf("nil BlobInfoList.String() = %q, want %q", s, "null")
+	}
+}
+
+func TestInspectGetBlobsWithMockScript(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := tmpDir + "/mock-nydus-image.sh"
+
+	// Create a mock that outputs valid JSON to stdout
+	script := `#!/bin/sh
+echo '[{"blob_id":"abc123","compressed_size":1024,"decompressed_size":2048,"readahead_offset":0,"readahead_size":512}]'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	inspector := NewInspector(scriptPath)
+	result, err := inspector.Inspect(InspectOption{
+		Operation: GetBlobs,
+		Bootstrap: "/some/path",
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error: %v", err)
+	}
+
+	blobs, ok := result.(BlobInfoList)
+	if !ok {
+		t.Fatalf("result type = %T, want BlobInfoList", result)
+	}
+	if len(blobs) != 1 {
+		t.Fatalf("len(blobs) = %d, want 1", len(blobs))
+	}
+	if blobs[0].BlobID != "abc123" {
+		t.Errorf("BlobID = %q, want %q", blobs[0].BlobID, "abc123")
+	}
+	if blobs[0].CompressedSize != 1024 {
+		t.Errorf("CompressedSize = %d, want 1024", blobs[0].CompressedSize)
+	}
+}
+
+func TestInspectGetBlobsMultiple(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := tmpDir + "/mock-nydus-image.sh"
+
+	script := `#!/bin/sh
+echo '[{"blob_id":"blob1","compressed_size":100},{"blob_id":"blob2","compressed_size":200}]'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	inspector := NewInspector(scriptPath)
+	result, err := inspector.Inspect(InspectOption{
+		Operation: GetBlobs,
+		Bootstrap: "/some/path",
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error: %v", err)
+	}
+
+	blobs := result.(BlobInfoList)
+	if len(blobs) != 2 {
+		t.Fatalf("len(blobs) = %d, want 2", len(blobs))
+	}
+	if blobs[0].BlobID != "blob1" {
+		t.Errorf("blobs[0].BlobID = %q", blobs[0].BlobID)
+	}
+	if blobs[1].BlobID != "blob2" {
+		t.Errorf("blobs[1].BlobID = %q", blobs[1].BlobID)
+	}
+}
+
+func TestInspectGetBlobsInvalidJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := tmpDir + "/mock-nydus-image.sh"
+
+	script := `#!/bin/sh
+echo 'not valid json'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	inspector := NewInspector(scriptPath)
+	_, err := inspector.Inspect(InspectOption{
+		Operation: GetBlobs,
+		Bootstrap: "/some/path",
+	})
+	if err == nil {
+		t.Error("expected error for invalid JSON output")
+	}
+}
+
+func TestInspectGetBlobsEmptyList(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := tmpDir + "/mock-nydus-image.sh"
+
+	script := `#!/bin/sh
+echo '[]'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	inspector := NewInspector(scriptPath)
+	result, err := inspector.Inspect(InspectOption{
+		Operation: GetBlobs,
+		Bootstrap: "/some/path",
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error: %v", err)
+	}
+
+	blobs := result.(BlobInfoList)
+	if len(blobs) != 0 {
+		t.Errorf("len(blobs) = %d, want 0", len(blobs))
+	}
+}
+
+func TestInspectGetBlobsCommandFails(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := tmpDir + "/mock-nydus-image.sh"
+
+	script := `#!/bin/sh
+echo "error message" >&2
+exit 1
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	inspector := NewInspector(scriptPath)
+	_, err := inspector.Inspect(InspectOption{
+		Operation: GetBlobs,
+		Bootstrap: "/some/path",
+	})
+	if err == nil {
+		t.Error("expected error when command fails")
+	}
+}
+
+func TestInspectOptionDefaults(t *testing.T) {
+	opt := InspectOption{}
+	if opt.Operation != 0 {
+		t.Errorf("Operation = %d, want 0 (GetBlobs)", opt.Operation)
+	}
+	if opt.Bootstrap != "" {
+		t.Errorf("Bootstrap = %q, want empty", opt.Bootstrap)
+	}
+}
+
+func TestBlobInfoJSONRoundTrip(t *testing.T) {
+	original := BlobInfo{
+		BlobID:           "roundtrip-test",
+		CompressedSize:   5000,
+		DecompressedSize: 10000,
+		ReadaheadOffset:  256,
+		ReadaheadSize:    1024,
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded BlobInfo
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded != original {
+		t.Errorf("roundtrip failed: got %+v, want %+v", decoded, original)
 	}
 }

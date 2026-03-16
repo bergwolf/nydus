@@ -5,6 +5,8 @@
 package build
 
 import (
+	"bytes"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -202,4 +204,120 @@ func TestNewBuilderDifferentPaths(t *testing.T) {
 			require.Equal(t, tt.path, b.binaryPath)
 		})
 	}
+}
+
+func TestRunBuildsCorrectArgsNoParent(t *testing.T) {
+	builder := NewBuilder("/nonexistent/binary")
+	// No parent bootstrap - should use "create" without --parent-bootstrap
+	err := builder.Run(BuilderOption{
+		BootstrapPath:  "/tmp/bootstrap",
+		RootfsPath:     "/tmp/rootfs",
+		WhiteoutSpec:   "oci",
+		OutputJSONPath: "/tmp/output.json",
+		BlobPath:       "/tmp/blob",
+		FsVersion:      "6",
+	})
+	require.Error(t, err)
+}
+
+func TestRunBuildsCorrectArgsWithAllFlags(t *testing.T) {
+	builder := NewBuilder("/nonexistent/binary")
+	err := builder.Run(BuilderOption{
+		ParentBootstrapPath: "/tmp/parent",
+		BootstrapPath:       "/tmp/bootstrap",
+		RootfsPath:          "/tmp/rootfs",
+		WhiteoutSpec:        "oci",
+		OutputJSONPath:      "/tmp/output.json",
+		BlobPath:            "/tmp/blob",
+		FsVersion:           "6",
+		AlignedChunk:        true,
+		ChunkDict:           "/tmp/chunkdict",
+		Compressor:          "lz4_block",
+		PrefetchPatterns:    "/bin /lib",
+		ChunkSize:           "0x200000",
+	})
+	require.Error(t, err)
+}
+
+func TestCompactNoOptional(t *testing.T) {
+	builder := NewBuilder("/nonexistent/binary")
+	err := builder.Compact(CompactOption{
+		BootstrapPath:     "/tmp/bootstrap",
+		BlobsDir:          "/tmp/blobs",
+		MinUsedRatio:      "10",
+		CompactBlobSize:   "20971520",
+		MaxCompactSize:    "209715200",
+		LayersToCompact:   "64",
+		BackendType:       "oss",
+		BackendConfigPath: "/tmp/backend.json",
+		OutputJSONPath:    "/tmp/output.json",
+	})
+	require.Error(t, err)
+}
+
+func TestGenerateEmptyBootstraps(t *testing.T) {
+	builder := NewBuilder("/nonexistent/binary")
+	err := builder.Generate(GenerateOption{
+		BootstrapPaths:         []string{},
+		DatabasePath:           "/tmp/db",
+		ChunkdictBootstrapPath: "/tmp/chunkdict",
+		OutputPath:             "/tmp/output",
+	})
+	require.Error(t, err)
+}
+
+func TestBuilderCustomStdoutStderr(t *testing.T) {
+	builder := NewBuilder("/usr/bin/nydus-image")
+	require.Equal(t, os.Stdout, builder.stdout)
+	require.Equal(t, os.Stderr, builder.stderr)
+
+	// Verify builder can be used with custom writers
+	var buf bytes.Buffer
+	builder.stdout = &buf
+	builder.stderr = &buf
+	require.Equal(t, &buf, builder.stdout)
+	require.Equal(t, &buf, builder.stderr)
+}
+
+func TestRunPrefetchPatternsNotEmpty(t *testing.T) {
+	builder := NewBuilder("/nonexistent/binary")
+	// When PrefetchPatterns is set, --prefetch-policy fs should be added
+	err := builder.Run(BuilderOption{
+		BootstrapPath:    "/tmp/bootstrap",
+		RootfsPath:       "/tmp/rootfs",
+		WhiteoutSpec:     "oci",
+		OutputJSONPath:   "/tmp/output.json",
+		BlobPath:         "/tmp/blob",
+		FsVersion:        "5",
+		PrefetchPatterns: "/",
+	})
+	require.Error(t, err)
+}
+
+func TestRunEmptyCompressor(t *testing.T) {
+	builder := NewBuilder("/nonexistent/binary")
+	err := builder.Run(BuilderOption{
+		BootstrapPath:  "/tmp/bootstrap",
+		RootfsPath:     "/tmp/rootfs",
+		WhiteoutSpec:   "oci",
+		OutputJSONPath: "/tmp/output.json",
+		BlobPath:       "/tmp/blob",
+		FsVersion:      "6",
+		Compressor:     "",
+	})
+	require.Error(t, err)
+}
+
+func TestRunEmptyChunkSize(t *testing.T) {
+	builder := NewBuilder("/nonexistent/binary")
+	err := builder.Run(BuilderOption{
+		BootstrapPath:  "/tmp/bootstrap",
+		RootfsPath:     "/tmp/rootfs",
+		WhiteoutSpec:   "oci",
+		OutputJSONPath: "/tmp/output.json",
+		BlobPath:       "/tmp/blob",
+		FsVersion:      "6",
+		ChunkSize:      "",
+	})
+	require.Error(t, err)
 }

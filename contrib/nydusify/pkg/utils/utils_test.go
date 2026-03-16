@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -241,8 +242,14 @@ func TestMarshalToDesc(t *testing.T) {
 }
 
 func TestWithRetry(t *testing.T) {
-	err := WithRetry(func() error {
-		_, err := http.Get("http://localhost:5000")
+	// Listen on an ephemeral port, then close it to guarantee nothing is listening.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	ln.Close()
+
+	err = WithRetry(func() error {
+		_, err := http.Get(fmt.Sprintf("http://%s", addr))
 		return err
 	}, 3, 5*time.Second)
 	require.ErrorIs(t, err, syscall.ECONNREFUSED)

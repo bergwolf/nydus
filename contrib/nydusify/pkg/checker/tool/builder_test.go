@@ -6,6 +6,7 @@ package tool
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +67,81 @@ func TestBuilderOptionDefaults(t *testing.T) {
 	}
 	if opt.DebugOutputPath != "" {
 		t.Errorf("DebugOutputPath should be empty, got %q", opt.DebugOutputPath)
+	}
+}
+
+func TestBuilderCheckWithTrueBinary(t *testing.T) {
+	// "true" always exits 0 but won't produce valid nydus-image output
+	// This tests cmd.Run() succeeds
+	b := NewBuilder("true")
+	err := b.Check(BuilderOption{
+		BootstrapPath:   "/dev/null",
+		DebugOutputPath: "/dev/null",
+	})
+	// "true" ignores arguments and exits 0
+	if err != nil {
+		t.Logf("true binary check returned error (expected if true doesn't exist at path): %v", err)
+	}
+}
+
+func TestBuilderCheckCommandArgs(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := tmpDir + "/mock-builder.sh"
+
+	// Create a script that writes its arguments to a file
+	script := `#!/bin/sh
+echo "$@" > ` + tmpDir + `/args.txt
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	b := NewBuilder(scriptPath)
+	_ = b.Check(BuilderOption{
+		BootstrapPath:   "/path/to/bootstrap",
+		DebugOutputPath: "/path/to/output.json",
+	})
+
+	argsData, err := os.ReadFile(tmpDir + "/args.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	args := string(argsData)
+	if !strings.Contains(args, "check") {
+		t.Errorf("expected 'check' in args, got: %s", args)
+	}
+	if !strings.Contains(args, "--bootstrap") {
+		t.Errorf("expected '--bootstrap' in args, got: %s", args)
+	}
+	if !strings.Contains(args, "/path/to/bootstrap") {
+		t.Errorf("expected bootstrap path in args, got: %s", args)
+	}
+	if !strings.Contains(args, "--output-json") {
+		t.Errorf("expected '--output-json' in args, got: %s", args)
+	}
+	if !strings.Contains(args, "/path/to/output.json") {
+		t.Errorf("expected output path in args, got: %s", args)
+	}
+}
+
+func TestBuilderCheckExitNonZero(t *testing.T) {
+	b := NewBuilder("false") // always exits 1
+	err := b.Check(BuilderOption{
+		BootstrapPath:   "/dev/null",
+		DebugOutputPath: "/dev/null",
+	})
+	if err == nil {
+		t.Error("expected error from false binary")
+	}
+}
+
+func TestBuilderStdoutStderr(t *testing.T) {
+	b := NewBuilder("/usr/bin/echo")
+	if b.stdout != os.Stdout {
+		t.Error("stdout should default to os.Stdout")
+	}
+	if b.stderr != os.Stderr {
+		t.Error("stderr should default to os.Stderr")
 	}
 }
