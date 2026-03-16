@@ -235,6 +235,9 @@ blob_device.read(&mut bio)?;
 
 ## Build and Release
 
+### Running Builds and Tests
+Always use the project `Makefile` to run build, test, lint, and related commands. Do not invoke `cargo build`, `cargo test`, `go build`, etc. directly — use the corresponding `make` targets instead (e.g., `make build`, `make release`, `make test`). Check the `Makefile` for available targets before running any build or test command.
+
 ### Build Configuration
 - Use `Cargo.toml` workspace configuration
 - Support cross-compilation for multiple architectures
