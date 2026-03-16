@@ -135,3 +135,46 @@ func TestNewOSSBackend(t *testing.T) {
 	require.Contains(t, err.Error(), "Parse OSS storage backend configuration")
 	require.Nil(t, backend)
 }
+
+func TestOSSBackendObjectPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		prefix   string
+		blobID   string
+		expected string
+	}{
+		{"with prefix", "prefix/", "blob1", "oss://test/prefix/blob1"},
+		{"no prefix", "", "blob1", "oss://test/blob1"},
+		{"nested prefix", "a/b/c/", "blob1", "oss://test/a/b/c/blob1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &OSSBackend{
+				objectPrefix: tt.prefix,
+				bucket:       tempOSSBackend().bucket,
+			}
+			require.Equal(t, tt.expected, b.remoteID(tt.blobID))
+		})
+	}
+}
+
+func TestOSSRangeReaderCreation(t *testing.T) {
+	b := tempOSSBackend()
+	rr, err := b.RangeReader("testblob")
+	require.NoError(t, err)
+	require.NotNil(t, rr)
+}
+
+func TestOSSBackendEmptyConfig(t *testing.T) {
+	_, err := newOSSBackend([]byte(`{}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid OSS configuration")
+}
+
+func TestOSSBackendNoCredentials(t *testing.T) {
+	cfg := `{"bucket_name": "test-bucket", "endpoint": "region.oss.com"}`
+	b, err := newOSSBackend([]byte(cfg))
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	require.Equal(t, "", b.objectPrefix)
+}

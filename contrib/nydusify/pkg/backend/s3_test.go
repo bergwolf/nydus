@@ -117,3 +117,98 @@ func TestNewS3Backend(t *testing.T) {
 	require.Contains(t, err.Error(), "invalid S3 configuration: missing 'bucket_name' or 'region'")
 	require.Nil(t, backend)
 }
+
+func TestS3ConfigSerialization(t *testing.T) {
+	cfg := S3Config{
+		AccessKeyID:     "mykey",
+		AccessKeySecret: "mysecret",
+		Endpoint:        "s3.example.com",
+		Scheme:          "http",
+		BucketName:      "mybucket",
+		Region:          "us-west-2",
+		ObjectPrefix:    "prefix/",
+	}
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	var decoded S3Config
+	err = json.Unmarshal(data, &decoded)
+	require.NoError(t, err)
+	require.Equal(t, cfg, decoded)
+}
+
+func TestS3ConfigOmitEmpty(t *testing.T) {
+	cfg := S3Config{
+		BucketName: "mybucket",
+		Region:     "us-east-1",
+	}
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	var m map[string]interface{}
+	err = json.Unmarshal(data, &m)
+	require.NoError(t, err)
+	_, hasKey := m["access_key_id"]
+	require.False(t, hasKey, "omitempty fields should not appear")
+}
+
+func TestS3RangeReaderCreation(t *testing.T) {
+	b := tempS3Backend()
+	rr, err := b.RangeReader("testblob")
+	require.NoError(t, err)
+	require.NotNil(t, rr)
+}
+
+func TestS3BlobObjectKeyWithPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		prefix   string
+		blobID   string
+		expected string
+	}{
+		{"with prefix", "myprefix/", "blob123", "myprefix/blob123"},
+		{"empty prefix", "", "blob123", "blob123"},
+		{"nested prefix", "a/b/c/", "blob", "a/b/c/blob"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &S3Backend{objectPrefix: tt.prefix}
+			require.Equal(t, tt.expected, b.blobObjectKey(tt.blobID))
+		})
+	}
+}
+
+func TestS3RemoteIDPaths(t *testing.T) {
+	tests := []struct {
+		name           string
+		endpoint       string
+		bucket         string
+		blobKey        string
+		expectedSuffix string
+	}{
+		{
+			"standard",
+			"https://s3.amazonaws.com",
+			"mybucket",
+			"myblob",
+			"/mybucket/myblob",
+		},
+		{
+			"with path in key",
+			"https://s3.amazonaws.com",
+			"mybucket",
+			"prefix/myblob",
+			"/mybucket/prefix/myblob",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &S3Backend{
+				endpointWithScheme: tt.endpoint,
+				bucketName:         tt.bucket,
+			}
+			id := b.remoteID(tt.blobKey)
+			require.Contains(t, id, tt.expectedSuffix)
+		})
+	}
+}
