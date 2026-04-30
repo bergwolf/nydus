@@ -1,0 +1,179 @@
+/*
+ *     Copyright 2026 The Dragonfly Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
+use tracing::debug;
+
+/// Represents system-wide memory statistics.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryStats {
+    /// Total physical memory in bytes.
+    pub total: u64,
+
+    /// Free memory in bytes (does not include cached/buffered memory).
+    pub free: u64,
+
+    /// Available memory in bytes (includes reclaimable cache/buffers).
+    pub available: u64,
+
+    /// Used memory in bytes.
+    pub usage: u64,
+
+    /// Memory usage percentage (0.0 - 100.0).
+    pub used_percent: f64,
+}
+
+/// Represents memory statistics for a specific process.
+#[derive(Debug, Clone, Default)]
+pub struct ProcessMemoryStats {
+    /// Memory usage percentage of the process relative to total system memory (0.0 - 100.0).
+    pub used_percent: f64,
+}
+
+/// Represents memory statistics from cgroup (Linux containers/resource limits).
+#[derive(Debug, Clone, Default)]
+pub struct CgroupMemoryStats {
+    /// Memory limit in bytes (-1 means unlimited).
+    pub limit: i64,
+
+    /// Current memory usage in bytes.
+    pub usage: u64,
+
+    /// Memory usage percentage relative to the cgroup limit (0.0 - 100.0).
+    pub used_percent: f64,
+}
+
+/// Memory represents a memory interface for monitoring memory statistics.
+#[derive(Debug, Clone, Default)]
+pub struct Memory {}
+
+/// Implementation of memory monitoring functionality.
+///
+/// Provides methods to retrieve memory statistics at three different levels:
+/// - System-wide: Overall memory usage, availability, and capacity.
+/// - Process-level: Memory usage for a specific process.
+/// - Cgroup-level: Memory resource limits and usage (Linux only).
+impl Memory {
+    /// Retrieves system-wide memory statistics.
+    ///
+    /// # Returns
+    /// MemoryStats containing total, free, available, used memory and usage percentage.
+    pub fn get_stats(&self) -> MemoryStats {
+        let sys =
+            System::new_with_specifics(RefreshKind::new().with_memory(MemoryRefreshKind::new()));
+        let total_memory = sys.total_memory();
+        let free_memory = sys.free_memory();
+        let available_memory = sys.available_memory();
+        let used_memory = sys.used_memory();
+        let used_percent = (sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0;
+
+        debug!(
+            "total memory: {} bytes, free memory: {} bytes, available memory: {} bytes, used memory: {} bytes, used percent: {}%",
+            total_memory,
+            free_memory,
+            available_memory,
+            used_memory,
+            used_percent
+        );
+
+        MemoryStats {
+            total: total_memory,
+            free: free_memory,
+            available: available_memory,
+            usage: used_memory,
+            used_percent: used_percent.clamp(0.0, 100.0),
+        }
+    }
+
+    /// Retrieves memory statistics for the process with the given PID.
+    ///
+    /// # Arguments
+    /// * `pid` - Process ID to query memory statistics for.
+    ///
+    /// # Returns
+    /// ProcessMemoryStats containing the process's memory usage percentage.
+    pub fn get_process_stats(&self, pid: u32) -> ProcessMemoryStats {
+        let sys = System::new_with_specifics(
+            RefreshKind::new()
+                .with_memory(MemoryRefreshKind::new().with_ram())
+                .with_processes(ProcessRefreshKind::new().with_memory()),
+        );
+        let memory_usage = sys.process(Pid::from_u32(pid)).unwrap().memory();
+        let total_memory = sys.total_memory();
+        let used_percent = (memory_usage as f64 / total_memory as f64) * 100.0;
+
+        debug!(
+            "process {} memory usage: {} bytes, total memory: {} bytes, used percent: {}%",
+            pid, memory_usage, total_memory, used_percent
+        );
+
+        ProcessMemoryStats {
+            used_percent: used_percent.clamp(0.0, 100.0),
+        }
+    }
+
+    /// Retrieves memory statistics from the cgroup (Linux only).
+    ///
+    /// # Arguments
+    /// * `pid` - Process ID used to determine which cgroup to query.
+    ///
+    /// # Returns
+    /// Some(CgroupMemoryStats) if cgroup memory controller is available and accessible,
+    /// None otherwise or on non-Linux platforms.
+    #[allow(unused_variables)]
+    pub fn get_cgroup_stats(&self, pid: u32) -> Option<CgroupMemoryStats> {
+        #[cfg(target_os = "linux")]
+        {
+            use crate::cgroups::get_cgroup_by_pid;
+            use cgroups_rs::fs::memory::MemController;
+            use tracing::error;
+
+            match get_cgroup_by_pid(pid) {
+                Ok(cgroup) => {
+                    if let Some(memory_controller) = cgroup.controller_of::<MemController>() {
+                        let memory_stats = memory_controller.memory_stat();
+                        let used_percent = if memory_stats.limit_in_bytes > 0 {
+                            (memory_stats.stat.rss as f64 / memory_stats.limit_in_bytes as f64)
+                                * 100.0
+                        } else {
+                            (memory_stats.stat.rss as f64 / self.get_stats().total as f64) * 100.0
+                        };
+
+                        debug!(
+                            "process {} cgroup memory limit: {} bytes, memory usage: {} bytes, used percent: {}%",
+                            pid,
+                            memory_stats.limit_in_bytes,
+                            memory_stats.stat.rss,
+                            used_percent,
+                        );
+
+                        return Some(CgroupMemoryStats {
+                            limit: memory_stats.limit_in_bytes,
+                            usage: memory_stats.stat.rss,
+                            used_percent: used_percent.clamp(0.0, 100.0),
+                        });
+                    }
+                }
+                Err(err) => {
+                    error!("failed to get cgroup for pid {}: {}", pid, err);
+                    return None;
+                }
+            }
+        }
+
+        None
+    }
+}

@@ -140,6 +140,8 @@ members = [
     "upgrade",
     "utils",
 ]
+[patch.crates-io]
+dragonfly-client-util = { path = "misc/dragonfly-client-util" }
 
 [workspace.dependencies]
 # rust-vmm crates
