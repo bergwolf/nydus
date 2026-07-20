@@ -1,0 +1,77 @@
+# Example storage config for `nydus fuse --config config.yaml`.
+#
+# This config serves blobs from an OCI image registry instead of a local
+# directory. Mount with:
+#
+#   nydus fuse --bootstrap layer.bootstrap --config config.yaml --mountpoint /mnt/nydus
+#
+# Note: `nydus check` only supports the `local` backend; this registry config
+# is intended for `nydus fuse`.
+
+backend:
+  type: registry
+  config:
+    # Registry host[:port]. For the official Docker registry use
+    # "registry-1.docker.io"; for a local distribution registry use
+    # "127.0.0.1:5000".
+    host: 127.0.0.1:5000
+
+    # Image repository (no tag/digest), e.g. "library/ubuntu".
+    repo: library/nydus-demo
+
+    # Use the plain `http` scheme instead of `https`. Set to true for a local
+    # distribution registry started with --plain-http. Default: false.
+    insecure: true
+
+    # Skip TLS certificate verification (also tolerates self-signed certs).
+    # Ignored when `insecure: true`. Default: false.
+    skip_verify: false
+
+    # Per-request timeout in seconds (connect + read). Default: 30.
+    timeout: 30
+
+    # Number of retries for on-demand reads. Prefetch reads are tried once.
+    # Default: 3.
+    retry_limit: 3
+
+    # Optional basic-auth credential: the base64-encoded `username:password`
+    # string. Omit `auth` entirely for anonymous / token-only registries.
+    # e.g. `printf 'testuser:testpassword' | base64` -> dGVzdHVzZXI6dGVzdHBhc3N3b3Jk
+    auth: dGVzdHVzZXI6dGVzdHBhc3N3b3Jk
+
+    # Extra CA certificate PEM files to trust (in addition to the system roots).
+    # Useful for registries fronted by a private CA. Default: [].
+    ca_cert_files: []
+    # ca_cert_files:
+    #   - /etc/nydus/certs/registry-ca.pem
+
+    # Optional proxy. Blob requests are routed through the HTTP forward proxy
+    # `url` (e.g. a Dragonfly dfdaemon P2P agent), keeping their original
+    # upstream URL so the proxy knows what to back-source. When built with the
+    # `backend-dragonfly-proxy` feature, set `dragonfly_scheduler_endpoint` to
+    # route blob GETs through the Dragonfly client SDK instead. Omit the whole
+    # `proxy` block to talk to the origin registry directly.
+    #
+    # proxy:
+    #   # HTTP forward-proxy URL.
+    #   url: http://127.0.0.1:65001
+    #   # Dragonfly scheduler endpoint (requires the backend-dragonfly-proxy
+    #   # feature). Takes precedence over `url` for GET requests.
+    #   dragonfly_scheduler_endpoint: http://127.0.0.1:65000
+
+cache:
+  type: local
+  config:
+    # Persistent chunk cache directory (equivalent to --cache-dir).
+    dir: /var/lib/nydus/cache
+
+prefetch:
+  # Toggle background blob prefetch after mount.
+  enable: true
+  # Number of concurrent prefetch worker threads.
+  threads: 10
+  # Also prefetch every remaining blob in full after the priority blobs
+  # (phase 2). Default: false. Leave false for an optimized image so only the
+  # "ondemand" redirect blob is prefetched, warming the access-ordered hot set
+  # without pulling the whole image.
+  full: false
