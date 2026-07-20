@@ -117,9 +117,7 @@ virtiofs = [
 block-nbd = ["nydus-service/block-nbd"]
 block-uffd = ["nydus-service/block-uffd"]
 
-backend-http-proxy = [
-    "nydus-storage/backend-http-proxy",
-]
+backend-http-proxy = ["nydus-storage/backend-http-proxy"]
 backend-localdisk = [
     "nydus-storage/backend-localdisk",
     "nydus-storage/backend-localdisk-gpt",
@@ -141,6 +139,10 @@ members = [
     "upgrade",
     "utils",
 ]
+# The Nydus image format v3 implementation lives in `v3/` and is its own
+# independent Cargo workspace with a different toolchain; exclude it so
+# top-level cargo commands don't try to absorb it.
+exclude = ["v3"]
 
 [workspace.dependencies]
 # rust-vmm crates

@@ -1,21 +1,42 @@
-name: CI
+name: V3 CI
 
 on:
   push:
-    branches: [main, release-*, v3]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE*"
+    branches:
+      - main
+      - master
+      - v3
+    paths:
+      - "v3/**"
+      - "!v3/**.md"
+      - "!v3/docs/**"
+      - "!v3/LICENSE*"
   pull_request:
-    branches: [main, release-*, v3]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE*"
+    branches:
+      - main
+      - master
+      - v3
+      - "release-*"
+      - "stable/**"
+    paths:
+      - "v3/**"
+      - "!v3/**.md"
+      - "!v3/docs/**"
+      - "!v3/LICENSE*"
+  schedule:
+    # Daily v3 sanity check at 03:00 UTC
+    - cron: "0 03 * * *"
+  workflow_dispatch:
 
 env:
   RUST_BACKTRACE: 1
+  # The v3 tree ships standalone Go modules (nydusify, tests/integration) that
+  # must not be pulled into the top-level nydus-rs go.work workspace.
+  GOWORK: off
+
+defaults:
+  run:
+    working-directory: v3
 
 jobs:
   check:
@@ -30,11 +51,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
-          repo-token: ${{ secrets.GH_TOKEN }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -57,7 +79,7 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.7
-          working-directory: tests/integration
+          working-directory: v3/tests/integration
 
   test:
     name: Run tests
@@ -71,11 +93,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
-          repo-token: ${{ secrets.GH_TOKEN }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -96,12 +119,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

@@ -1,7 +1,7 @@
-name: Mirror Top Images
+name: V3 Mirror Top Images
 
 # Manually-triggered job that mirrors the top Docker Hub images referenced by
-# tests/integration/texture/top-images.txt into this repository's GHCR
+# v3/tests/integration/texture/top-images.txt into this repository's GHCR
 # namespace (ghcr.io/<owner>/<repo>/<image>) so CI is not subject to Docker
 # Hub pull rate limits. Docker Hub rate limiting (HTTP 429) is handled by
 # capped exponential backoff with jitter and per-image wait limits.
@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
   packages: write
+
+defaults:
+  run:
+    working-directory: v3
 
 jobs:
   mirror:

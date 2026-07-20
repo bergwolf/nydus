@@ -1,4 +1,4 @@
-name: Top Images E2E
+name: V3 Top Images E2E
 
 # Manually-triggered end-to-end test that converts and validates the top
 # Docker Hub images with nydusify, pushing the converted nydus images straight
@@ -17,10 +17,17 @@ on:
 
 env:
   RUST_BACKTRACE: 1
+  # The v3 tree ships standalone Go modules (nydusify, tests/integration) that
+  # must not be pulled into the top-level nydus-rs go.work workspace.
+  GOWORK: off
 
 permissions:
   contents: read
   packages: write
+
+defaults:
+  run:
+    working-directory: v3
 
 jobs:
   top-images-e2e:
@@ -59,7 +66,7 @@ jobs:
       - name: Install Docker
         uses: docker/setup-docker-action@v4
 
-      # The image list points at GHCR mirrors (see mirror-top-images.yml) and
+      # The image list points at GHCR mirrors (see v3-mirror-top-images.yml) and
       # the converted nydus images are pushed back to the same GHCR namespace;
       # authenticate so packages can be pulled and pushed.
       - name: Log in to GHCR
@@ -72,6 +79,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
