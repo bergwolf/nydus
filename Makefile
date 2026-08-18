@@ -9,6 +9,8 @@ E2E_TIMEOUT ?= 600s
 E2E_COUNT ?= 1
 E2E_GO_TEST_ARGS ?=
 NYDUSFS_MERGE_PAUSE_SECS ?= 0
+NYDUS_E2E_CHURN_SECS ?=
+NYDUS_E2E_CHURN_MIN_ITERATIONS ?=
 EROFS_C_FUSE ?=
 EROFS_MKFS ?=
 
@@ -73,7 +75,7 @@ GO_TEST_ENV = $(SUDO) env "PATH=$(CURDIR)/target/release:$(dir $(GO_BIN)):$(PATH
 	"EROFS_C_FUSE=$(EROFS_C_FUSE)" \
 	"EROFS_MKFS=$(EROFS_MKFS)"
 TEST_SUPPORT_FILES = harness.go optimize.go diff.go
-E2E_TEST_FILES = roundtrip_test.go $(TEST_SUPPORT_FILES)
+E2E_TEST_FILES = roundtrip_test.go stability_test.go $(TEST_SUPPORT_FILES)
 TOOCI_TEST_FILES = tooci_test.go $(TEST_SUPPORT_FILES)
 UFFD_TEST_FILES = uffd_test.go uffd_fault_test.go $(TEST_SUPPORT_FILES)
 UBLK_TEST_FILES = ublk_test.go $(TEST_SUPPORT_FILES)
@@ -109,12 +111,14 @@ test:
 	$(CARGO) test --workspace
 
 # Run end-to-end integration tests (requires root, builds release first).
-# Only runs tests/e2e/roundtrip_test.go.
+# Runs the round-trip and stability FUSE suites.
 test-e2e: release nydusify
 	@test -n "$(GO_BIN)" || { echo "go not found; set GO=/abs/path/to/go or GO_BIN=/abs/path/to/go"; exit 1; }
 	cd tests/e2e && \
 		$(GO_TEST_ENV) \
 		NYDUSFS_MERGE_PAUSE_SECS="$(NYDUSFS_MERGE_PAUSE_SECS)" \
+		NYDUS_E2E_CHURN_SECS="$(NYDUS_E2E_CHURN_SECS)" \
+		NYDUS_E2E_CHURN_MIN_ITERATIONS="$(NYDUS_E2E_CHURN_MIN_ITERATIONS)" \
 		NYDUSFS_RUN_EROFS_COMPAT="$(NYDUSFS_RUN_EROFS_COMPAT)" \
 		$(GO_BIN) test -v $(if $(strip $(E2E_TEST)),-run '^$(E2E_TEST)$$',) -count $(E2E_COUNT) -timeout $(E2E_TIMEOUT) $(E2E_GO_TEST_ARGS) $(E2E_TEST_FILES)
 

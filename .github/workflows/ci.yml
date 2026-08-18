@@ -124,6 +124,9 @@ jobs:
           sudo apt-get install -y -qq acl attr erofs-utils fuse3 xfsprogs
 
       - name: Run e2e tests
+        env:
+          NYDUS_E2E_CHURN_SECS: "120"
+          NYDUS_E2E_CHURN_MIN_ITERATIONS: "30"
         run: |
           make test-e2e
 
