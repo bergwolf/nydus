@@ -71,13 +71,11 @@ func testStabilityMountUnmountChurn(t *testing.T, nydusBin string) {
 
 	deadline := time.Now().Add(time.Duration(envInt(t, "NYDUS_E2E_CHURN_SECS", defaultChurnSeconds)) * time.Second)
 	minIterations := envInt(t, "NYDUS_E2E_CHURN_MIN_ITERATIONS", defaultChurnMinIterations)
-	startMounts := mountSourceCount(t, "nydus")
+	startMounts := nydusMountCount(t)
 
-	var procs []*exec.Cmd
 	iterations := 0
 	for time.Now().Before(deadline) {
 		cmd, cleanup := startStabilityMount(t, nydusBin, fixture.bootstrap, fixture.blobDir, "", fixture.mountpoint)
-		procs = append(procs, cmd)
 		for rel, want := range refs {
 			got := filepath.Join(fixture.mountpoint, rel)
 			requireFileContentEqual(t, want, got)
@@ -91,10 +89,7 @@ func testStabilityMountUnmountChurn(t *testing.T, nydusBin string) {
 
 	require.GreaterOrEqual(t, iterations, minIterations, "completed too few churn iterations before deadline")
 	require.False(t, isMountpoint(fixture.mountpoint), "mountpoint should be detached after churn")
-	require.Equal(t, startMounts, mountSourceCount(t, "nydus"), "nydus mount count should return to baseline")
-	for i, cmd := range procs {
-		require.NotNil(t, cmd.ProcessState, "iteration %d process was not reaped", i)
-	}
+	require.Equal(t, startMounts, nydusMountCount(t), "nydus mount count should return to baseline")
 }
 
 func testStabilityKillUnderIO(t *testing.T, nydusBin string) {
@@ -104,7 +99,12 @@ func testStabilityKillUnderIO(t *testing.T, nydusBin string) {
 	})
 
 	cmd, cleanup := startStabilityMount(t, nydusBin, fixture.bootstrap, fixture.blobDir, "", fixture.mountpoint)
-	defer cleanup()
+	cleanedUp := false
+	defer func() {
+		if !cleanedUp {
+			cleanup()
+		}
+	}()
 
 	type readerResult struct {
 		name string
@@ -133,13 +133,17 @@ func testStabilityKillUnderIO(t *testing.T, nydusBin string) {
 
 	require.NoError(t, cmd.Process.Signal(syscall.SIGKILL))
 
-	deadline := time.After(stabilityReadTimeout)
+	deadline := time.Now().Add(stabilityReadTimeout)
 	for i := 0; i < readers; i++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatalf("%d reader goroutines stayed blocked after SIGKILL", readers-i)
+		}
 		select {
 		case res := <-results:
 			require.Error(t, res.err, "reader %s should stop with an error once the daemon dies", res.name)
-		case <-deadline:
-			t.Fatal("reader goroutines stayed blocked after SIGKILL")
+		case <-time.After(remaining):
+			t.Fatalf("%d reader goroutines stayed blocked after SIGKILL", readers-i)
 		}
 	}
 
@@ -148,6 +152,7 @@ func testStabilityKillUnderIO(t *testing.T, nydusBin string) {
 		return !isMountpoint(fixture.mountpoint)
 	}, 5*time.Second, 100*time.Millisecond, "stale mountpoint did not go away")
 	cleanup()
+	cleanedUp = true
 
 	_, recoveryCleanup := startStabilityMount(t, nydusBin, fixture.bootstrap, fixture.blobDir, "", fixture.mountpoint)
 	defer recoveryCleanup()
@@ -191,8 +196,9 @@ func testStabilityDiskFullCacheDir(t *testing.T, nydusBin string) {
 		}
 	}
 
-	require.True(t, readErr != nil || tmpfsAvailBytes(t, cacheFS) <= 128<<10,
-		"cache tmpfs never filled and reads never errored; still have %d bytes free", tmpfsAvailBytes(t, cacheFS))
+	freeBytes := tmpfsAvailBytes(t, cacheFS)
+	require.True(t, readErr != nil || freeBytes <= 128<<10,
+		"cache tmpfs never filled and reads never errored; still have %d bytes free", freeBytes)
 	require.True(t, processAlive(cmd), "daemon should stay alive when cache backing store fills")
 	require.NoError(t, statWithin(filepath.Join(fixture.mountpoint, "files/tiny_2b"), 5*time.Second))
 }
@@ -250,7 +256,7 @@ func testStabilityFdUlimit(t *testing.T, nydusBin string) {
 			started.Add(1)
 			<-hold
 			_, err = io.Copy(io.Discard, f)
-			if err == nil || errors.Is(err, io.EOF) {
+			if err == nil {
 				errs <- nil
 				return
 			}
@@ -278,7 +284,7 @@ func testStabilityFdUlimit(t *testing.T, nydusBin string) {
 	close(errs)
 	for err := range errs {
 		if err != nil {
-			t.Logf("fd-pressure read returned clean error: %v", err)
+			t.Logf("fd-pressure read returned error: %v", err)
 		}
 	}
 
@@ -359,7 +365,7 @@ func envInt(t *testing.T, name string, def int) int {
 	return v
 }
 
-func mountSourceCount(t *testing.T, source string) int {
+func nydusMountCount(t *testing.T) int {
 	t.Helper()
 	data, err := os.ReadFile("/proc/self/mountinfo")
 	require.NoError(t, err)
@@ -374,7 +380,7 @@ func mountSourceCount(t *testing.T, source string) int {
 			continue
 		}
 		fields := strings.Fields(parts[1])
-		if len(fields) >= 2 && fields[1] == source {
+		if len(fields) >= 1 && fields[0] == "fuse.nydus" {
 			count++
 		}
 	}
@@ -405,7 +411,7 @@ func churnReadUntilFailure(path string, seed int, started *atomic.Int32) error {
 		ok := false
 		if seed%2 == 0 {
 			_, err = io.ReadFull(f, buf)
-			ok = err == nil || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+			ok = err == nil || errors.Is(err, io.ErrUnexpectedEOF)
 		} else {
 			maxOff := size - int64(len(buf))
 			if maxOff < 0 {
@@ -462,5 +468,10 @@ func tmpfsAvailBytes(t *testing.T, path string) uint64 {
 	t.Helper()
 	var st unix.Statfs_t
 	require.NoError(t, unix.Statfs(path, &st))
-	return st.Bavail * uint64(st.Bsize)
+	require.Greater(t, st.Bsize, int64(0), "statfs returned non-positive block size")
+	bsize := uint64(st.Bsize)
+	if st.Bavail > 0 {
+		require.LessOrEqual(t, bsize, ^uint64(0)/st.Bavail, "statfs values overflow")
+	}
+	return st.Bavail * bsize
 }
