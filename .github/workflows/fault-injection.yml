@@ -1,0 +1,68 @@
+name: Fault Injection
+
+# FUSE stability gate: a toxiproxy-style fault-injecting TCP proxy sits in
+# front of the registry backend and injects latency, connection resets and
+# response truncation while the FUSE mount is read cold. Every scenario must
+# stay byte-exact and the daemon must survive. Runs on every PR and as a
+# nightly stability run with more repetitions.
+on:
+  pull_request:
+    branches: [main, release-*, v3]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "Repetitions of the fault-injection suite"
+        required: false
+        default: "1"
+
+env:
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+jobs:
+  fault-injection:
+    name: FUSE registry fault injection
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+
+      - name: Start local registry
+        run: |
+          docker run -d --name registry -p 5000:5000 registry:2
+          timeout 30 bash -c 'until curl -sf http://localhost:5000/v2/; do sleep 1; done'
+
+      # PRs run the suite once; the nightly schedule repeats it for a
+      # stability signal. Any iteration failure fails the run — no retries.
+      - name: Run fault-injection E2E tests
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            count=5
+          else
+            count="${{ github.event.inputs.count || '1' }}"
+          fi
+          make test-fault-injection FAULT_INJECTION_COUNT="$count"

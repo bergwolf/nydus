@@ -44,6 +44,10 @@ FANOTIFY_RUN_FAIL_CLOSED ?=
 # is installed).
 FANOTIFY_RUN_STRACE ?=
 
+FAULT_INJECTION_TIMEOUT ?= 1800s
+FAULT_INJECTION_COUNT ?= 1
+FAULT_INJECTION_GO_TEST_ARGS ?=
+
 NBD_TIMEOUT ?= 600s
 NBD_COUNT ?= 1
 NBD_GO_TEST_ARGS ?=
@@ -81,6 +85,9 @@ CACHE_SHARING_TEST_FILES = cache_sharing_test.go $(TEST_SUPPORT_FILES)
 FS_TEST_FILES = fs_test.go $(TEST_SUPPORT_FILES)
 TOP_IMAGES_TEST_FILES = top_image_test.go $(TEST_SUPPORT_FILES)
 FANOTIFY_TEST_FILES = fanotify_test.go $(TEST_SUPPORT_FILES)
+# fault_proxy_test.go reuses dataset/registry helpers defined in
+# fanotify_test.go, so both files compile together.
+FAULT_INJECTION_TEST_FILES = fault_proxy_test.go fanotify_test.go $(TEST_SUPPORT_FILES)
 # NBD and bench use whole-package compilation: nbd_test.go and bench_test.go
 # reuse helpers (shaFile, usedBytes, kernelVersion, erofsSupported, etc.)
 # defined in fanotify_test.go and nbd_test.go, so the entire package must be
@@ -88,7 +95,7 @@ FANOTIFY_TEST_FILES = fanotify_test.go $(TEST_SUPPORT_FILES)
 NBD_TEST_PKG = .
 BENCH_TEST_PKG = .
 
-.PHONY: build release nydusify test test-e2e test-tooci test-uffd test-uffd-stability test-cache-sharing test-fanotify test-nbd test-bench test-fs test-top-images crate clean
+.PHONY: build release nydusify test test-e2e test-tooci test-uffd test-uffd-stability test-cache-sharing test-fanotify test-fault-injection test-nbd test-bench test-fs test-top-images crate clean
 
 build:
 	$(CARGO) build -p nydus --features "$(FEATURES)"
@@ -187,6 +194,17 @@ test-fanotify: release nydusify
 		FANOTIFY_RUN_FAIL_CLOSED="$(FANOTIFY_RUN_FAIL_CLOSED)" \
 		FANOTIFY_RUN_STRACE="$(FANOTIFY_RUN_STRACE)" \
 		$(GO_BIN) test -v -run '^TestFanotify$$' -count $(FANOTIFY_COUNT) -timeout $(FANOTIFY_TIMEOUT) $(FANOTIFY_GO_TEST_ARGS) $(FANOTIFY_TEST_FILES)
+
+# Run the FUSE registry fault-injection E2E test (requires root, docker for
+# the throwaway local registry). A toxiproxy-style fault-injecting TCP proxy
+# fronts the registry and injects latency, connection resets and response
+# truncation while the FUSE mount is read cold; every scenario must stay
+# byte-exact and the daemon must survive.
+test-fault-injection: release nydusify
+	@test -n "$(GO_BIN)" || { echo "go not found; set GO=/abs/path/to/go or GO_BIN=/abs/path/to/go"; exit 1; }
+	cd tests/e2e && \
+		$(GO_TEST_ENV) \
+		$(GO_BIN) test -v -run '^TestFuseFaultInjection$$' -count $(FAULT_INJECTION_COUNT) -timeout $(FAULT_INJECTION_TIMEOUT) $(FAULT_INJECTION_GO_TEST_ARGS) $(FAULT_INJECTION_TEST_FILES)
 
 # Run the NBD E2E test (requires root, the nbd kernel module, EROFS support).
 # Builds nydus with the nbd feature. Uses a LOCAL backend (nydus build
