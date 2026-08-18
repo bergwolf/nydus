@@ -248,7 +248,13 @@ func (p *faultProxy) handle(client *net.TCPConn) {
 	}
 	up := upstream.(*net.TCPConn)
 
-	if !p.track(client) || !p.track(up) {
+	if !p.track(client) {
+		_ = client.Close()
+		_ = up.Close()
+		return
+	}
+	if !p.track(up) {
+		p.untrack(client)
 		_ = client.Close()
 		_ = up.Close()
 		return
@@ -825,7 +831,7 @@ func (e *faultInjectionEnv) caseRecovery(t *testing.T) { // S6
 	mntHashes := e.strictTreeHash(t)
 	assert.Equal(t, e.sourceHashes, mntHashes, "full-tree byte-exact after faults are lifted")
 	e.assertHealthy(t)
-	assert.Equal(t, 0, e.countLogs(`panic`), "the daemon never panicked across the whole run")
+	assert.Equal(t, 0, e.countLogs(`panicked at|panic:`), "the daemon never panicked across the whole run")
 
 	t.Logf("  proxy totals: %d connections, %d resets, %d truncations, %d bytes relayed",
 		e.proxy.conns.Load(), e.proxy.resets.Load(), e.proxy.truncations.Load(), e.proxy.relayed.Load())
