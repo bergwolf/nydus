@@ -312,7 +312,9 @@ jobs:
           /usr/local/bin/scheduler --config /etc/dragonfly/scheduler.yaml > /tmp/dragonfly/logs/scheduler.stdout.log 2>&1 &
           /usr/local/bin/dfdaemon daemon --config /etc/dragonfly/dfdaemon.yaml > /tmp/dragonfly/logs/dfdaemon.stdout.log 2>&1 &
 
+          timeout 30 bash -c 'until nc -z 127.0.0.1 65003; do sleep 1; done'
           timeout 30 bash -c 'until nc -z 127.0.0.1 8002; do sleep 1; done'
+          timeout 30 bash -c 'until nc -z 127.0.0.1 4001; do sleep 1; done'
 
       - name: Extract nydus image bootstrap
         run: |
@@ -329,6 +331,13 @@ jobs:
               if annotations.get('containerd.io/snapshot/nydus-bootstrap') == 'true':
                   print(layer['digest'])
                   break
+          else:
+              for layer in manifest.get('layers', []):
+                  if 'nydus' in layer.get('mediaType', '') and 'blob' not in layer.get('mediaType', ''):
+                      print(layer['digest'])
+                      break
+              else:
+                  raise SystemExit('bootstrap layer not found')
           PY
           )
           crane blob "${NYDUS_IMAGE}@${BOOTSTRAP_DIGEST}" > "${WORK_DIR}/bootstrap-layer.tar.gz"

@@ -124,7 +124,6 @@ func killDfdaemon(t *testing.T) {
 func TestDragonflyE2E(t *testing.T) {
 	env := loadDragonflyEnv(t)
 	cleanup := env.startFuse(t)
-	defer cleanup()
 
 	relPath, firstData, err := readMountedFile(t, env.mountpoint)
 	require.NoError(t, err, "initial FUSE read must succeed")
@@ -137,7 +136,7 @@ func TestDragonflyE2E(t *testing.T) {
 	cleanup = env.startFuse(t)
 	defer cleanup()
 
-	_, dataAfterFailure, err := readMountedFile(t, env.mountpoint)
+	dataAfterFailure, err := os.ReadFile(filepath.Join(env.mountpoint, relPath))
 	if strings.Contains(env.dragonflyMode, "strict") {
 		require.Error(t, err, "strict mode should fail once Dragonfly is down")
 		return
@@ -145,7 +144,7 @@ func TestDragonflyE2E(t *testing.T) {
 
 	require.NoError(t, err, "fallback mode should keep reads alive through origin fallback")
 	require.NotEmpty(t, dataAfterFailure)
-	_, _, _ = relPath, firstData, dataAfterFailure
+	require.NotEmpty(t, firstData)
 }
 
 type injectableProxy struct {
@@ -156,6 +155,8 @@ type injectableProxy struct {
 	status    int
 	remaining int
 }
+
+const proxyControlURL = "http://127.0.0.1:18080"
 
 func newInjectableProxy(t *testing.T, addr string) (*injectableProxy, func()) {
 	t.Helper()
@@ -208,7 +209,11 @@ func (p *injectableProxy) inject(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (p *injectableProxy) clear(w http.ResponseWriter, _ *http.Request) {
+func (p *injectableProxy) clear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
 	p.mu.Lock()
 	p.status = 0
 	p.remaining = 0
@@ -237,7 +242,7 @@ func postInject(t *testing.T, status, count int) {
 	t.Helper()
 	payload, err := json.Marshal(map[string]int{"status": status, "count": count})
 	require.NoError(t, err)
-	resp, err := http.Post("http://127.0.0.1:18080/_test/inject", "application/json", strings.NewReader(string(payload)))
+	resp, err := http.Post(proxyControlURL+"/_test/inject", "application/json", strings.NewReader(string(payload)))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -245,7 +250,7 @@ func postInject(t *testing.T, status, count int) {
 
 func clearInject(t *testing.T) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodDelete, "http://127.0.0.1:18080/_test/clear", nil)
+	req, err := http.NewRequest(http.MethodPost, proxyControlURL+"/_test/clear", nil)
 	require.NoError(t, err)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -259,7 +264,7 @@ func TestProxyErrorSimulation(t *testing.T) {
 	require.NotEmpty(t, configPath, "NYDUS_PROXY_ERROR_CONFIG must be set")
 	env.configPath = configPath
 
-	_, stopProxy := newInjectableProxy(t, "127.0.0.1:18080")
+	_, stopProxy := newInjectableProxy(t, strings.TrimPrefix(proxyControlURL, "http://"))
 	defer stopProxy()
 
 	t.Run("status_429_ondemand_fallback", func(t *testing.T) {
