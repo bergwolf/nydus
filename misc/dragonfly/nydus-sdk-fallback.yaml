@@ -1,0 +1,19 @@
+backend:
+  type: registry
+  config:
+    addr: https://ghcr.io
+    repository: dragonflyoss/image-service/nginx
+    http:
+      timeout: 5s
+      max_retries: 1
+      tls:
+        skip_verify: false
+    dragonfly:
+      scheduler_endpoint: http://127.0.0.1:8002
+      ondemand_max_retries: 3
+      prefetch_max_retries: 10
+      fallback_interval: 1s
+storage:
+  dir: /tmp/nydus-dragonfly/cache-fallback
+prefetch:
+  scope: none
