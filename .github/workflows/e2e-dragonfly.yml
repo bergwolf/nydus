@@ -223,6 +223,7 @@ jobs:
             --target-insecure --target-plain-http
 
           BOOTSTRAP_FILE=$(find "${WORK_DIR}/check" -name image.boot | head -1)
+          [ -n "${BOOTSTRAP_FILE}" ] || { echo "exported image.boot not found under ${WORK_DIR}/check"; exit 1; }
           cp "${BOOTSTRAP_FILE}" "${WORK_DIR}/bootstrap"
 
       - name: Run Dragonfly FUSE E2E test (${{ matrix.mode }})
@@ -354,6 +355,7 @@ jobs:
             --target-insecure --target-plain-http
 
           BOOTSTRAP_FILE=$(find "${WORK_DIR}/check" -name image.boot | head -1)
+          [ -n "${BOOTSTRAP_FILE}" ] || { echo "exported image.boot not found under ${WORK_DIR}/check"; exit 1; }
           cp "${BOOTSTRAP_FILE}" "${WORK_DIR}/bootstrap"
 
       - name: Run proxy error simulation test
