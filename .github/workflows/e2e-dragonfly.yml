@@ -175,13 +175,15 @@ jobs:
 
       - name: Start Dragonfly services
         run: |
-          /usr/local/bin/manager --config /etc/dragonfly/manager.yaml > /tmp/dragonfly/logs/manager.stdout.log 2>&1 &
-          /usr/local/bin/scheduler --config /etc/dragonfly/scheduler.yaml > /tmp/dragonfly/logs/scheduler.stdout.log 2>&1 &
-          /usr/local/bin/dfdaemon daemon --config /etc/dragonfly/dfdaemon.yaml > /tmp/dragonfly/logs/dfdaemon.stdout.log 2>&1 &
+          # Dragonfly services need root to create their default work
+          # directories (e.g. /usr/local/dragonfly, /var/run/dragonfly).
+          sudo /usr/local/bin/manager --config /etc/dragonfly/manager.yaml > /tmp/dragonfly/logs/manager.stdout.log 2>&1 &
+          sudo /usr/local/bin/scheduler --config /etc/dragonfly/scheduler.yaml > /tmp/dragonfly/logs/scheduler.stdout.log 2>&1 &
+          sudo /usr/local/bin/dfdaemon --config /etc/dragonfly/dfdaemon.yaml --log-dir /tmp/dragonfly/logs/dfdaemon > /tmp/dragonfly/logs/dfdaemon.stdout.log 2>&1 &
 
-          timeout 30 bash -c 'until nc -z 127.0.0.1 65003; do sleep 1; done'
-          timeout 30 bash -c 'until nc -z 127.0.0.1 8002; do sleep 1; done'
-          timeout 30 bash -c 'until nc -z 127.0.0.1 4001; do sleep 1; done'
+          timeout 60 bash -c 'until nc -z 127.0.0.1 65003; do sleep 1; done'
+          timeout 60 bash -c 'until nc -z 127.0.0.1 8002; do sleep 1; done'
+          timeout 60 bash -c 'until nc -z 127.0.0.1 4001; do sleep 1; done'
 
       - name: Extract nydus image bootstrap
         run: |
@@ -308,13 +310,15 @@ jobs:
           mkdir -p /tmp/dragonfly/logs /tmp/dragonfly/cache /tmp/dragonfly/storage
           mkdir -p /tmp/nydus-dragonfly/cache-proxy-fallback /tmp/nydus-dragonfly/cache-proxy-strict /tmp/nydus-dragonfly/mnt
 
-          /usr/local/bin/manager --config /etc/dragonfly/manager.yaml > /tmp/dragonfly/logs/manager.stdout.log 2>&1 &
-          /usr/local/bin/scheduler --config /etc/dragonfly/scheduler.yaml > /tmp/dragonfly/logs/scheduler.stdout.log 2>&1 &
-          /usr/local/bin/dfdaemon daemon --config /etc/dragonfly/dfdaemon.yaml > /tmp/dragonfly/logs/dfdaemon.stdout.log 2>&1 &
+          # Dragonfly services need root to create their default work
+          # directories (e.g. /usr/local/dragonfly, /var/run/dragonfly).
+          sudo /usr/local/bin/manager --config /etc/dragonfly/manager.yaml > /tmp/dragonfly/logs/manager.stdout.log 2>&1 &
+          sudo /usr/local/bin/scheduler --config /etc/dragonfly/scheduler.yaml > /tmp/dragonfly/logs/scheduler.stdout.log 2>&1 &
+          sudo /usr/local/bin/dfdaemon --config /etc/dragonfly/dfdaemon.yaml --log-dir /tmp/dragonfly/logs/dfdaemon > /tmp/dragonfly/logs/dfdaemon.stdout.log 2>&1 &
 
-          timeout 30 bash -c 'until nc -z 127.0.0.1 65003; do sleep 1; done'
-          timeout 30 bash -c 'until nc -z 127.0.0.1 8002; do sleep 1; done'
-          timeout 30 bash -c 'until nc -z 127.0.0.1 4001; do sleep 1; done'
+          timeout 60 bash -c 'until nc -z 127.0.0.1 65003; do sleep 1; done'
+          timeout 60 bash -c 'until nc -z 127.0.0.1 8002; do sleep 1; done'
+          timeout 60 bash -c 'until nc -z 127.0.0.1 4001; do sleep 1; done'
 
       - name: Extract nydus image bootstrap
         run: |
