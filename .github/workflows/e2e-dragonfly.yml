@@ -47,11 +47,24 @@ jobs:
         run: |
           cargo build -p nydus --release --features "cli,backend-dragonfly-proxy"
 
-      - name: Upload nydus binary
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+          cache: false
+
+      - name: Build nydusify
+        run: |
+          cd nydusify
+          go build -o ../target/release/nydusify .
+
+      - name: Upload nydus binaries
         uses: actions/upload-artifact@v4
         with:
           name: nydus-artifact
-          path: target/release/nydus
+          path: |
+            target/release/nydus
+            target/release/nydusify
 
   dragonfly-download:
     runs-on: ${{ vars.RUNNER_OS || 'ubuntu-latest' }}
@@ -96,11 +109,9 @@ jobs:
       matrix:
         include:
           - mode: sdk-proxy-fallback
-            image: ghcr.io/dragonflyoss/image-service/nginx:nydus-latest
             config: misc/dragonfly/nydus-sdk-fallback.yaml
             cache_dir: /tmp/nydus-dragonfly/cache-fallback
           - mode: sdk-proxy-strict
-            image: ghcr.io/dragonflyoss/image-service/nginx:nydus-latest
             config: misc/dragonfly/nydus-sdk-strict.yaml
             cache_dir: /tmp/nydus-dragonfly/cache-strict
     steps:
@@ -122,6 +133,7 @@ jobs:
       - name: Install binaries
         run: |
           sudo install -m 0755 /tmp/nydus-bin/nydus /usr/local/bin/nydus
+          sudo install -m 0755 /tmp/nydus-bin/nydusify /usr/local/bin/nydusify
           sudo install -m 0755 /tmp/dragonfly-bin/manager /usr/local/bin/manager
           sudo install -m 0755 /tmp/dragonfly-bin/scheduler /usr/local/bin/scheduler
           sudo install -m 0755 /tmp/dragonfly-bin/dfdaemon /usr/local/bin/dfdaemon
@@ -131,9 +143,6 @@ jobs:
         with:
           go-version: '1.25.5'
           cache: false
-
-      - name: Install crane
-        run: go install github.com/google/go-containerregistry/cmd/crane@latest
 
       - name: Install runtime dependencies
         run: |
@@ -188,36 +197,32 @@ jobs:
           sudo /usr/local/bin/dfdaemon --config /etc/dragonfly/dfdaemon.yaml --log-dir /tmp/dragonfly/logs/dfdaemon > /tmp/dragonfly/logs/dfdaemon.stdout.log 2>&1 &
           timeout 60 bash -c 'until nc -z 127.0.0.1 4001; do sleep 1; done'
 
-      - name: Extract nydus image bootstrap
+      - name: Build and push nydus test image
         run: |
+          # Seed a throwaway local registry with a freshly converted nydus
+          # image: upstream nydus sample images use the legacy RAFS format,
+          # which this nydus cannot mount (EROFS-based bootstraps only).
+          docker run -d --name registry -p 5000:5000 --restart=no registry:2
+          timeout 30 bash -c 'until curl -sf http://127.0.0.1:5000/v2/ >/dev/null; do sleep 1; done'
+
           WORK_DIR="/tmp/nydus-dragonfly"
-          mkdir -p "${WORK_DIR}"
+          mkdir -p "${WORK_DIR}/source/etc" "${WORK_DIR}/source/data"
+          printf 'NAME="Nydus Dragonfly E2E"\nID=nydus-e2e\nVERSION_ID=1\n' > "${WORK_DIR}/source/etc/os-release"
+          echo "root:x:0:0:root:/root:/bin/sh" > "${WORK_DIR}/source/etc/passwd"
+          echo "root:x:0:" > "${WORK_DIR}/source/etc/group"
+          head -c 4194304 /dev/urandom > "${WORK_DIR}/source/data/blob1.bin"
+          head -c 8388608 /dev/urandom > "${WORK_DIR}/source/data/blob2.bin"
 
-          crane manifest --platform linux/amd64 "${{ matrix.image }}" > "${WORK_DIR}/manifest.json"
+          nydusify convert --source "${WORK_DIR}/source" \
+            --target 127.0.0.1:5000/nydus-e2e/dragonfly:v1 \
+            --builder /usr/local/bin/nydus \
+            --target-insecure --target-plain-http
+          nydusify check --target 127.0.0.1:5000/nydus-e2e/dragonfly:v1 \
+            --work-dir "${WORK_DIR}/check" \
+            --builder /usr/local/bin/nydus \
+            --target-insecure --target-plain-http
 
-          BOOTSTRAP_DIGEST=$(python3 - <<'PY'
-          import json
-          with open('/tmp/nydus-dragonfly/manifest.json') as f:
-              manifest = json.load(f)
-          for layer in manifest.get('layers', []):
-              annotations = layer.get('annotations', {})
-              if annotations.get('containerd.io/snapshot/nydus-bootstrap') == 'true':
-                  print(layer['digest'])
-                  break
-          else:
-              for layer in manifest.get('layers', []):
-                  if 'nydus' in layer.get('mediaType', '') and 'blob' not in layer.get('mediaType', ''):
-                      print(layer['digest'])
-                      break
-              else:
-                  raise SystemExit('bootstrap layer not found')
-          PY
-          )
-
-          crane blob "${{ matrix.image }}@${BOOTSTRAP_DIGEST}" > "${WORK_DIR}/bootstrap-layer.tar.gz"
-          mkdir -p "${WORK_DIR}/bootstrap-extract"
-          tar -xf "${WORK_DIR}/bootstrap-layer.tar.gz" -C "${WORK_DIR}/bootstrap-extract"
-          BOOTSTRAP_FILE=$(find "${WORK_DIR}/bootstrap-extract" -name "*.boot" -o -name "image.boot" | head -1)
+          BOOTSTRAP_FILE=$(find "${WORK_DIR}/check" -name image.boot | head -1)
           cp "${BOOTSTRAP_FILE}" "${WORK_DIR}/bootstrap"
 
       - name: Run Dragonfly FUSE E2E test (${{ matrix.mode }})
@@ -251,7 +256,7 @@ jobs:
           sudo pkill -f '/usr/local/bin/dfdaemon' 2>/dev/null || true
           sudo pkill -f '/usr/local/bin/scheduler' 2>/dev/null || true
           sudo pkill -f '/usr/local/bin/manager' 2>/dev/null || true
-          docker rm -f mysql redis 2>/dev/null || true
+          docker rm -f mysql redis registry 2>/dev/null || true
 
       - name: Upload logs
         uses: actions/upload-artifact@v4
@@ -283,6 +288,7 @@ jobs:
       - name: Install binaries
         run: |
           sudo install -m 0755 /tmp/nydus-bin/nydus /usr/local/bin/nydus
+          sudo install -m 0755 /tmp/nydus-bin/nydusify /usr/local/bin/nydusify
           sudo install -m 0755 /tmp/dragonfly-bin/manager /usr/local/bin/manager
           sudo install -m 0755 /tmp/dragonfly-bin/scheduler /usr/local/bin/scheduler
           sudo install -m 0755 /tmp/dragonfly-bin/dfdaemon /usr/local/bin/dfdaemon
@@ -292,9 +298,6 @@ jobs:
         with:
           go-version: '1.25.5'
           cache: false
-
-      - name: Install crane
-        run: go install github.com/google/go-containerregistry/cmd/crane@latest
 
       - name: Start MySQL and Redis
         run: |
@@ -325,34 +328,32 @@ jobs:
           sudo /usr/local/bin/dfdaemon --config /etc/dragonfly/dfdaemon.yaml --log-dir /tmp/dragonfly/logs/dfdaemon > /tmp/dragonfly/logs/dfdaemon.stdout.log 2>&1 &
           timeout 60 bash -c 'until nc -z 127.0.0.1 4001; do sleep 1; done'
 
-      - name: Extract nydus image bootstrap
+      - name: Build and push nydus test image
         run: |
-          NYDUS_IMAGE="ghcr.io/dragonflyoss/image-service/nginx:nydus-latest"
+          # Seed a throwaway local registry with a freshly converted nydus
+          # image: upstream nydus sample images use the legacy RAFS format,
+          # which this nydus cannot mount (EROFS-based bootstraps only).
+          docker run -d --name registry -p 5000:5000 --restart=no registry:2
+          timeout 30 bash -c 'until curl -sf http://127.0.0.1:5000/v2/ >/dev/null; do sleep 1; done'
+
           WORK_DIR="/tmp/nydus-dragonfly"
-          mkdir -p "${WORK_DIR}"
-          crane manifest --platform linux/amd64 "${NYDUS_IMAGE}" > "${WORK_DIR}/manifest.json"
-          BOOTSTRAP_DIGEST=$(python3 - <<'PY'
-          import json
-          with open('/tmp/nydus-dragonfly/manifest.json') as f:
-              manifest = json.load(f)
-          for layer in manifest.get('layers', []):
-              annotations = layer.get('annotations', {})
-              if annotations.get('containerd.io/snapshot/nydus-bootstrap') == 'true':
-                  print(layer['digest'])
-                  break
-          else:
-              for layer in manifest.get('layers', []):
-                  if 'nydus' in layer.get('mediaType', '') and 'blob' not in layer.get('mediaType', ''):
-                      print(layer['digest'])
-                      break
-              else:
-                  raise SystemExit('bootstrap layer not found')
-          PY
-          )
-          crane blob "${NYDUS_IMAGE}@${BOOTSTRAP_DIGEST}" > "${WORK_DIR}/bootstrap-layer.tar.gz"
-          mkdir -p "${WORK_DIR}/bootstrap-extract"
-          tar -xf "${WORK_DIR}/bootstrap-layer.tar.gz" -C "${WORK_DIR}/bootstrap-extract"
-          BOOTSTRAP_FILE=$(find "${WORK_DIR}/bootstrap-extract" -name "*.boot" -o -name "image.boot" | head -1)
+          mkdir -p "${WORK_DIR}/source/etc" "${WORK_DIR}/source/data"
+          printf 'NAME="Nydus Dragonfly E2E"\nID=nydus-e2e\nVERSION_ID=1\n' > "${WORK_DIR}/source/etc/os-release"
+          echo "root:x:0:0:root:/root:/bin/sh" > "${WORK_DIR}/source/etc/passwd"
+          echo "root:x:0:" > "${WORK_DIR}/source/etc/group"
+          head -c 4194304 /dev/urandom > "${WORK_DIR}/source/data/blob1.bin"
+          head -c 8388608 /dev/urandom > "${WORK_DIR}/source/data/blob2.bin"
+
+          nydusify convert --source "${WORK_DIR}/source" \
+            --target 127.0.0.1:5000/nydus-e2e/dragonfly:v1 \
+            --builder /usr/local/bin/nydus \
+            --target-insecure --target-plain-http
+          nydusify check --target 127.0.0.1:5000/nydus-e2e/dragonfly:v1 \
+            --work-dir "${WORK_DIR}/check" \
+            --builder /usr/local/bin/nydus \
+            --target-insecure --target-plain-http
+
+          BOOTSTRAP_FILE=$(find "${WORK_DIR}/check" -name image.boot | head -1)
           cp "${BOOTSTRAP_FILE}" "${WORK_DIR}/bootstrap"
 
       - name: Run proxy error simulation test
@@ -384,7 +385,7 @@ jobs:
           sudo pkill -f '/usr/local/bin/dfdaemon' 2>/dev/null || true
           sudo pkill -f '/usr/local/bin/scheduler' 2>/dev/null || true
           sudo pkill -f '/usr/local/bin/manager' 2>/dev/null || true
-          docker rm -f mysql redis 2>/dev/null || true
+          docker rm -f mysql redis registry 2>/dev/null || true
 
       - name: Upload logs
         uses: actions/upload-artifact@v4

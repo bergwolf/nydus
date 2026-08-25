@@ -123,6 +123,17 @@ func killDfdaemon(t *testing.T) {
 
 func TestDragonflyE2E(t *testing.T) {
 	env := loadDragonflyEnv(t)
+
+	// In strict mode the origin configured in the nydus config is the
+	// injectable proxy: it forwards to the local registry so the initial
+	// read (and Dragonfly back-to-source) succeeds, and later injects hard
+	// failures so origin fallback cannot succeed either.
+	strict := strings.Contains(env.dragonflyMode, "strict")
+	if strict {
+		_, stopProxy := newInjectableProxy(t, strings.TrimPrefix(proxyControlURL, "http://"))
+		defer stopProxy()
+	}
+
 	cleanup := env.startFuse(t)
 
 	relPath, firstData, err := readMountedFile(t, env.mountpoint)
@@ -131,13 +142,18 @@ func TestDragonflyE2E(t *testing.T) {
 
 	killDfdaemon(t)
 	wipeCacheDir(env.cacheDir)
+	if strict {
+		// Fail every origin blob fetch from now on: with Dragonfly down and
+		// the origin hard-failing, strict mode must surface a read error.
+		postInject(t, http.StatusServiceUnavailable, -1)
+	}
 
 	cleanup()
 	cleanup = env.startFuse(t)
 	defer cleanup()
 
 	dataAfterFailure, err := os.ReadFile(filepath.Join(env.mountpoint, relPath))
-	if strings.Contains(env.dragonflyMode, "strict") {
+	if strict {
 		require.Error(t, err, "strict mode should fail once Dragonfly is down")
 		return
 	}
@@ -160,7 +176,7 @@ const proxyControlURL = "http://127.0.0.1:18080"
 
 func newInjectableProxy(t *testing.T, addr string) (*injectableProxy, func()) {
 	t.Helper()
-	targetURL, err := url.Parse("https://ghcr.io")
+	targetURL, err := url.Parse(envOr("PROXY_TARGET_URL", "http://127.0.0.1:5000"))
 	require.NoError(t, err)
 
 	p := &injectableProxy{targetURL: targetURL}
@@ -223,7 +239,10 @@ func (p *injectableProxy) clear(w http.ResponseWriter, r *http.Request) {
 
 func (p *injectableProxy) serve(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
-	inject := p.status > 0 && p.remaining != 0 && strings.Contains(r.URL.Path, "/blobs/")
+	// Only blob GETs are injected: HEAD blob-size probes stay healthy so the
+	// tests exercise the data-read policy, not metadata recovery.
+	inject := p.status > 0 && p.remaining != 0 && r.Method == http.MethodGet &&
+		strings.Contains(r.URL.Path, "/blobs/")
 	if inject {
 		if p.remaining > 0 {
 			p.remaining--
@@ -267,6 +286,21 @@ func TestProxyErrorSimulation(t *testing.T) {
 	_, stopProxy := newInjectableProxy(t, strings.TrimPrefix(proxyControlURL, "http://"))
 	defer stopProxy()
 
+	// The 403 case runs first while dfdaemon's piece cache is still cold, so
+	// its back-to-source fetches are guaranteed to see the injected failure.
+	// It injects with no budget: every origin blob GET (Dragonfly
+	// back-to-source and the direct fallback path alike) is denied, so the
+	// read must surface an error no matter which path serves it.
+	t.Run("status_403_terminal", func(t *testing.T) {
+		postInject(t, http.StatusForbidden, -1)
+		defer clearInject(t)
+		wipeCacheDir(env.cacheDir)
+		cleanup := env.startFuse(t)
+		defer cleanup()
+		_, _, err := readMountedFile(t, env.mountpoint)
+		require.Error(t, err)
+	})
+
 	t.Run("status_429_ondemand_fallback", func(t *testing.T) {
 		postInject(t, http.StatusTooManyRequests, 1)
 		defer clearInject(t)
@@ -276,16 +310,6 @@ func TestProxyErrorSimulation(t *testing.T) {
 		_, data, err := readMountedFile(t, env.mountpoint)
 		require.NoError(t, err)
 		require.NotEmpty(t, data)
-	})
-
-	t.Run("status_403_terminal", func(t *testing.T) {
-		postInject(t, http.StatusForbidden, 1)
-		defer clearInject(t)
-		wipeCacheDir(env.cacheDir)
-		cleanup := env.startFuse(t)
-		defer cleanup()
-		_, _, err := readMountedFile(t, env.mountpoint)
-		require.Error(t, err)
 	})
 
 	t.Run("status_503_retry_or_fallback", func(t *testing.T) {

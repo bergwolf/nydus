@@ -2,7 +2,7 @@ backend:
   type: registry
   config:
     addr: http://127.0.0.1:18080
-    repository: dragonflyoss/image-service/nginx
+    repository: nydus-e2e/dragonfly
     http:
       timeout: 5s
       max_retries: 0

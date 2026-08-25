@@ -1,10 +1,12 @@
 backend:
   type: registry
   config:
-    # Intentionally unroutable origin endpoint: this mode is used to assert
-    # behavior when Dragonfly is unavailable and origin fallback cannot succeed.
-    addr: http://127.0.0.1:9
-    repository: dragonflyoss/image-service/nginx
+    # The origin is the in-test injectable proxy (fronting the local
+    # registry): Dragonfly back-to-source works while the proxy is healthy,
+    # and the test injects hard failures to assert that reads fail once
+    # Dragonfly is down and origin fallback cannot succeed.
+    addr: http://127.0.0.1:18080
+    repository: nydus-e2e/dragonfly
     http:
       timeout: 5s
       max_retries: 0
