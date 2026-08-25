@@ -278,7 +278,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use nydus_backend::{throttled_error, BlobBackend, Local, ReadContext};
-    use nydus_format::blob::{BlobMetadata, BlobMetadataChunk, BlobMetadataGroup};
+    use nydus_format::blob::{BlobMetadata, BlobMetadataBlockGroup, BlobMetadataChunk};
     use nydus_format::utils::{sha256_bytes, write_minimal_full_blob, SHA256_DIGEST_SIZE};
     use tempfile::tempdir;
 
@@ -359,7 +359,7 @@ mod tests {
         let meta = BlobMetadata::from_parts(
             data_blob_id,
             1,
-            vec![BlobMetadataGroup::new(0, 1, 0, 4096, crc32c::crc32c(&payload)).unwrap()],
+            vec![BlobMetadataBlockGroup::new(0, 1, 0, 4096, crc32c::crc32c(&payload)).unwrap()],
             vec![BlobMetadataChunk::new(*blake3::hash(&payload).as_bytes(), 0, 1).unwrap()],
         )
         .unwrap();
