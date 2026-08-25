@@ -256,7 +256,7 @@ func postInject(t *testing.T, status, count int) {
 	require.NoError(t, err)
 	resp, err := http.Post(proxyControlURL+"/_test/inject", "application/json", strings.NewReader(string(payload)))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
@@ -266,7 +266,7 @@ func clearInject(t *testing.T) {
 	require.NoError(t, err)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
