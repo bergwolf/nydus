@@ -175,13 +175,18 @@ jobs:
 
       - name: Start Dragonfly services
         run: |
-          /usr/local/bin/manager --config /etc/dragonfly/manager.yaml > /tmp/dragonfly/logs/manager.stdout.log 2>&1 &
-          /usr/local/bin/scheduler --config /etc/dragonfly/scheduler.yaml > /tmp/dragonfly/logs/scheduler.stdout.log 2>&1 &
-          /usr/local/bin/dfdaemon daemon --config /etc/dragonfly/dfdaemon.yaml > /tmp/dragonfly/logs/dfdaemon.stdout.log 2>&1 &
+          # manager/scheduler create their default workHome under /usr/local/dragonfly,
+          # so they must run as root. Start services sequentially since each one
+          # registers with the previous.
+          sudo /usr/local/bin/manager --config /etc/dragonfly/manager.yaml > /tmp/dragonfly/logs/manager.stdout.log 2>&1 &
+          timeout 90 bash -c 'until nc -z 127.0.0.1 65003; do sleep 1; done'
 
-          timeout 30 bash -c 'until nc -z 127.0.0.1 65003; do sleep 1; done'
-          timeout 30 bash -c 'until nc -z 127.0.0.1 8002; do sleep 1; done'
-          timeout 30 bash -c 'until nc -z 127.0.0.1 4001; do sleep 1; done'
+          sudo /usr/local/bin/scheduler --config /etc/dragonfly/scheduler.yaml > /tmp/dragonfly/logs/scheduler.stdout.log 2>&1 &
+          timeout 60 bash -c 'until nc -z 127.0.0.1 8002; do sleep 1; done'
+
+          # Rust dfdaemon has no `daemon` subcommand and takes the log dir via --log-dir.
+          sudo /usr/local/bin/dfdaemon --config /etc/dragonfly/dfdaemon.yaml --log-dir /tmp/dragonfly/logs/dfdaemon > /tmp/dragonfly/logs/dfdaemon.stdout.log 2>&1 &
+          timeout 60 bash -c 'until nc -z 127.0.0.1 4001; do sleep 1; done'
 
       - name: Extract nydus image bootstrap
         run: |
@@ -233,8 +238,7 @@ jobs:
         run: |
           LOG_DIR="/tmp/dragonfly-e2e-logs"
           mkdir -p "${LOG_DIR}"
-          cp /tmp/dragonfly/logs/*.log "${LOG_DIR}/" 2>/dev/null || true
-          cp /tmp/dragonfly/logs/*.stdout.log "${LOG_DIR}/" 2>/dev/null || true
+          cp -r /tmp/dragonfly/logs/. "${LOG_DIR}/" 2>/dev/null || true
           cp -r /tmp/nydus-dragonfly/logs "${LOG_DIR}/nydus" 2>/dev/null || true
           docker logs mysql > "${LOG_DIR}/mysql.log" 2>&1 || true
           docker logs redis > "${LOG_DIR}/redis.log" 2>&1 || true
@@ -308,13 +312,18 @@ jobs:
           mkdir -p /tmp/dragonfly/logs /tmp/dragonfly/cache /tmp/dragonfly/storage
           mkdir -p /tmp/nydus-dragonfly/cache-proxy-fallback /tmp/nydus-dragonfly/cache-proxy-strict /tmp/nydus-dragonfly/mnt
 
-          /usr/local/bin/manager --config /etc/dragonfly/manager.yaml > /tmp/dragonfly/logs/manager.stdout.log 2>&1 &
-          /usr/local/bin/scheduler --config /etc/dragonfly/scheduler.yaml > /tmp/dragonfly/logs/scheduler.stdout.log 2>&1 &
-          /usr/local/bin/dfdaemon daemon --config /etc/dragonfly/dfdaemon.yaml > /tmp/dragonfly/logs/dfdaemon.stdout.log 2>&1 &
+          # manager/scheduler create their default workHome under /usr/local/dragonfly,
+          # so they must run as root. Start services sequentially since each one
+          # registers with the previous.
+          sudo /usr/local/bin/manager --config /etc/dragonfly/manager.yaml > /tmp/dragonfly/logs/manager.stdout.log 2>&1 &
+          timeout 90 bash -c 'until nc -z 127.0.0.1 65003; do sleep 1; done'
 
-          timeout 30 bash -c 'until nc -z 127.0.0.1 65003; do sleep 1; done'
-          timeout 30 bash -c 'until nc -z 127.0.0.1 8002; do sleep 1; done'
-          timeout 30 bash -c 'until nc -z 127.0.0.1 4001; do sleep 1; done'
+          sudo /usr/local/bin/scheduler --config /etc/dragonfly/scheduler.yaml > /tmp/dragonfly/logs/scheduler.stdout.log 2>&1 &
+          timeout 60 bash -c 'until nc -z 127.0.0.1 8002; do sleep 1; done'
+
+          # Rust dfdaemon has no `daemon` subcommand and takes the log dir via --log-dir.
+          sudo /usr/local/bin/dfdaemon --config /etc/dragonfly/dfdaemon.yaml --log-dir /tmp/dragonfly/logs/dfdaemon > /tmp/dragonfly/logs/dfdaemon.stdout.log 2>&1 &
+          timeout 60 bash -c 'until nc -z 127.0.0.1 4001; do sleep 1; done'
 
       - name: Extract nydus image bootstrap
         run: |
@@ -364,8 +373,7 @@ jobs:
         run: |
           LOG_DIR="/tmp/proxy-error-test-logs"
           mkdir -p "${LOG_DIR}"
-          cp /tmp/dragonfly/logs/*.log "${LOG_DIR}/" 2>/dev/null || true
-          cp /tmp/dragonfly/logs/*.stdout.log "${LOG_DIR}/" 2>/dev/null || true
+          cp -r /tmp/dragonfly/logs/. "${LOG_DIR}/" 2>/dev/null || true
           cp -r /tmp/nydus-dragonfly/logs "${LOG_DIR}/nydus" 2>/dev/null || true
 
       - name: Cleanup
