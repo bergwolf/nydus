@@ -54,13 +54,6 @@ func loadDragonflyEnv(t *testing.T) dragonflyEnv {
 	}
 }
 
-func envOr(key, def string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return def
-}
-
 func (e dragonflyEnv) startFuse(t *testing.T) func() {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(e.mountpoint, 0o755))
