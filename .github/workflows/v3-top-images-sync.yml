@@ -1,4 +1,4 @@
-name: Sync Top Images to GHCR
+name: V3 Sync Top Images to GHCR
 run-name: "Sync Top Images to GHCR (${{ inputs.images || 'all images' }})"
 
 on:
@@ -26,7 +26,7 @@ jobs:
       images: ${{ steps.list.outputs.images }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Build image list
         id: list
@@ -38,7 +38,7 @@ jobs:
           else
             images=$(sed -e 's/#.*$//' -e 's/[[:space:]]//g' -e '/^$/d' \
                          -e "s|^ghcr\.io/[^/]*/[^/]*/||" -e 's/:[^:]*$//' \
-                         tests/e2e/corpus/top-images.txt)
+                         v3/tests/e2e/corpus/top-images.txt)
           fi
           echo "images=$(printf '%s\n' $images | jq -cRn '[inputs | select(length > 0)]')" >> "$GITHUB_OUTPUT"
 

@@ -2,17 +2,15 @@ name: E2E Test With Dragonfly
 
 on:
   push:
-    branches: [main, release-*, v3]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE*'
+    branches: [master, main, release-*]
+    paths:
+      - "v3/**"
+      - ".github/workflows/v3-e2e-dragonfly.yml"
   pull_request:
-    branches: [main, release-*, v3]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE*'
+    branches: [master, main, release-*]
+    paths:
+      - "v3/**"
+      - ".github/workflows/v3-e2e-dragonfly.yml"
   workflow_dispatch:
 
 permissions:
@@ -45,7 +43,7 @@ jobs:
 
       - name: Build nydus (with Dragonfly backend)
         run: |
-          cargo build -p nydus --release --features "cli,backend-dragonfly-proxy"
+          cd v3 && cargo build -p nydus --release --features "cli,backend-dragonfly-proxy"
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -55,7 +53,7 @@ jobs:
 
       - name: Build nydusify
         run: |
-          cd nydusify
+          cd v3/nydusify
           go build -o ../target/release/nydusify .
 
       - name: Upload nydus binaries
@@ -63,8 +61,8 @@ jobs:
         with:
           name: nydus-artifact
           path: |
-            target/release/nydus
-            target/release/nydusify
+            v3/target/release/nydus
+            v3/target/release/nydusify
 
   dragonfly-download:
     runs-on: ${{ vars.RUNNER_OS || 'ubuntu-latest' }}
@@ -109,10 +107,10 @@ jobs:
       matrix:
         include:
           - mode: sdk-proxy-fallback
-            config: misc/dragonfly/nydus-sdk-fallback.yaml
+            config: v3/misc/dragonfly/nydus-sdk-fallback.yaml
             cache_dir: /tmp/nydus-dragonfly/cache-fallback
           - mode: sdk-proxy-strict
-            config: misc/dragonfly/nydus-sdk-strict.yaml
+            config: v3/misc/dragonfly/nydus-sdk-strict.yaml
             cache_dir: /tmp/nydus-dragonfly/cache-strict
     steps:
       - name: Checkout code
@@ -176,9 +174,9 @@ jobs:
       - name: Setup Dragonfly config
         run: |
           sudo mkdir -p /etc/dragonfly
-          sudo cp misc/dragonfly/manager.yaml /etc/dragonfly/manager.yaml
-          sudo cp misc/dragonfly/scheduler.yaml /etc/dragonfly/scheduler.yaml
-          sudo cp misc/dragonfly/dfdaemon.yaml /etc/dragonfly/dfdaemon.yaml
+          sudo cp v3/misc/dragonfly/manager.yaml /etc/dragonfly/manager.yaml
+          sudo cp v3/misc/dragonfly/scheduler.yaml /etc/dragonfly/scheduler.yaml
+          sudo cp v3/misc/dragonfly/dfdaemon.yaml /etc/dragonfly/dfdaemon.yaml
           mkdir -p /tmp/dragonfly/logs /tmp/dragonfly/cache /tmp/dragonfly/storage
           mkdir -p /tmp/nydus-dragonfly/cache-fallback /tmp/nydus-dragonfly/cache-strict /tmp/nydus-dragonfly/mnt
 
@@ -228,7 +226,7 @@ jobs:
 
       - name: Run Dragonfly FUSE E2E test (${{ matrix.mode }})
         run: |
-          cd tests/e2e
+          cd v3/tests/e2e
           sudo -E env "PATH=$PATH" \
             NYDUS_BIN=/usr/local/bin/nydus \
             NYDUS_CONFIG=${{ github.workspace }}/${{ matrix.config }} \
@@ -310,9 +308,9 @@ jobs:
       - name: Setup and start Dragonfly services
         run: |
           sudo mkdir -p /etc/dragonfly
-          sudo cp misc/dragonfly/manager.yaml /etc/dragonfly/manager.yaml
-          sudo cp misc/dragonfly/scheduler.yaml /etc/dragonfly/scheduler.yaml
-          sudo cp misc/dragonfly/dfdaemon.yaml /etc/dragonfly/dfdaemon.yaml
+          sudo cp v3/misc/dragonfly/manager.yaml /etc/dragonfly/manager.yaml
+          sudo cp v3/misc/dragonfly/scheduler.yaml /etc/dragonfly/scheduler.yaml
+          sudo cp v3/misc/dragonfly/dfdaemon.yaml /etc/dragonfly/dfdaemon.yaml
           mkdir -p /tmp/dragonfly/logs /tmp/dragonfly/cache /tmp/dragonfly/storage
           mkdir -p /tmp/nydus-dragonfly/cache-proxy-fallback /tmp/nydus-dragonfly/cache-proxy-strict /tmp/nydus-dragonfly/mnt
 
@@ -360,12 +358,12 @@ jobs:
 
       - name: Run proxy error simulation test
         run: |
-          cd tests/e2e
+          cd v3/tests/e2e
           sudo -E env "PATH=$PATH" \
             NYDUS_BIN=/usr/local/bin/nydus \
-            NYDUS_CONFIG=${{ github.workspace }}/misc/dragonfly/nydus-sdk-fallback.yaml \
+            NYDUS_CONFIG=${{ github.workspace }}/v3/misc/dragonfly/nydus-sdk-fallback.yaml \
             NYDUS_CACHE_DIR=/tmp/nydus-dragonfly/cache-proxy-fallback \
-            NYDUS_PROXY_ERROR_CONFIG=${{ github.workspace }}/misc/dragonfly/nydus-proxy-error-fallback.yaml \
+            NYDUS_PROXY_ERROR_CONFIG=${{ github.workspace }}/v3/misc/dragonfly/nydus-proxy-error-fallback.yaml \
             BOOTSTRAP_PATH=/tmp/nydus-dragonfly/bootstrap \
             WORK_DIR=/tmp/nydus-dragonfly \
             go test -v -run '^TestProxyErrorSimulation$' -timeout 20m -count=1 dragonfly_test.go harness.go

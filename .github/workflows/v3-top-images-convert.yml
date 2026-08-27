@@ -1,4 +1,4 @@
-name: Convert and Check Top Images
+name: V3 Convert and Check Top Images
 run-name: "Convert and Check Top Images (concurrency=${{ inputs.concurrency }})"
 
 on:
@@ -71,6 +71,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -84,8 +85,8 @@ jobs:
 
       - name: Build nydusify
         run: |
-          make -C nydusify build
-          sudo install -m 0755 nydusify/nydusify /usr/local/bin/nydusify
+          make -C v3/nydusify build
+          sudo install -m 0755 v3/nydusify/nydusify /usr/local/bin/nydusify
 
       - name: Run top-images conversion test
         env:
@@ -95,7 +96,7 @@ jobs:
           sudo mkdir -p /mnt/nydusify-top-images
           sudo chmod 0777 /mnt/nydusify-top-images
           df -h / /mnt
-          make test-top-images \
+          cd v3 && make test-top-images \
             TOP_IMAGES_TIMEOUT="140m" \
             TOP_IMAGES_CONCURRENCY="$TOP_IMAGES_CONCURRENCY" \
             TOP_IMAGES_REGISTRY="$TOP_IMAGES_REGISTRY" \

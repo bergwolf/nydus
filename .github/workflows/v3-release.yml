@@ -1,9 +1,9 @@
-name: Release
+name: V3 Release
 
 on:
   push:
     tags:
-      - v[0-9]+.[0-9]+.[0-9]+*
+      - v3-v[0-9]+.[0-9]+.[0-9]+*
   workflow_dispatch:
 
 env:
@@ -15,8 +15,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: v3-release-${{ github.ref }}
   cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: v3
+
 
 jobs:
   build:
@@ -43,7 +48,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-          shared-key: release-${{ matrix.arch }}
+          shared-key: v3-release-${{ matrix.arch }}
+          workspaces: v3
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -106,6 +112,7 @@ jobs:
           ./nydus-static/nydus --help > /dev/null
           ./nydus-static/nydusify --help > /dev/null
 
+
       - name: Create release tarball
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
@@ -121,10 +128,10 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: nydus-release-tarball-linux-${{ matrix.arch }}
+          name: v3-nydus-release-tarball-linux-${{ matrix.arch }}
           path: |
-            ${{ env.tarball }}
-            ${{ env.tarball }}.sha256sum
+            v3/${{ env.tarball }}
+            v3/${{ env.tarball }}.sha256sum
           if-no-files-found: error
 
   release:
@@ -139,14 +146,14 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v7
         with:
-          pattern: nydus-release-tarball-*
+          pattern: v3-nydus-release-tarball-*
           merge-multiple: true
-          path: nydus-tarball
+          path: v3-nydus-tarball
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          name: Nydus ${{ github.ref_name }}
+          name: V3 Nydus ${{ github.ref_name }}
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
           files: nydus-tarball/*

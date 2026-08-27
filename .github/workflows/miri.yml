@@ -3,10 +3,10 @@ name: Miri Test
 on:
   push:
     branches: ["**", "stable/**"]
-    paths-ignore: [ '**.md', '**.png', '**.jpg', '**.svg', '**/docs/**' ]
+    paths-ignore: [ '**.md', '**.png', '**.jpg', '**.svg', '**/docs/**', 'v3/**' ]
   pull_request:
     branches: ["**", "stable/**"]
-    paths-ignore: [ '**.md', '**.png', '**.jpg', '**.svg', '**/docs/**' ]
+    paths-ignore: [ '**.md', '**.png', '**.jpg', '**.svg', '**/docs/**', 'v3/**' ]
   schedule:
     # Run daily sanity check at 03:00 clock UTC
     - cron: "0 03 * * *"

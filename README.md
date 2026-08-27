@@ -170,3 +170,11 @@ Feel free to reach us via Slack or Dingtalk.
 - **Twitter:** [@dragonfly_oss](https://twitter.com/dragonfly_oss)
 
 - **Dingtalk Group Number:** 34971767
+
+## Nydus v3
+
+This repository also hosts **Nydus v3**, a next-generation rewrite of the Nydus image service with
+a redesigned architecture. All v3 code, documentation, tests, and scripts live under the [`v3/`](v3/)
+directory as an independent Rust workspace.
+
+See [`v3/README.md`](v3/README.md) for details on the v3 subproject.

@@ -1,18 +1,16 @@
-name: CI
+name: V3 CI
 
 on:
   push:
-    branches: [main, release-*, v3]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE*"
+    branches: [master, main, release-*]
+    paths:
+      - "v3/**"
+      - ".github/workflows/v3-ci.yml"
   pull_request:
-    branches: [main, release-*, v3]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE*"
+    branches: [master, main, release-*]
+    paths:
+      - "v3/**"
+      - ".github/workflows/v3-ci.yml"
 
 permissions:
   contents: read
@@ -21,23 +19,95 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+defaults:
+  run:
+    working-directory: v3
+
 env:
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Cargo check
-    timeout-minutes: 30
+  # ---------- Lint jobs (from v3 lint.yml) ----------
+
+  v3-rustfmt:
+    name: V3 Rustfmt
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+          toolchain: 1.88.0
+
+      - name: Run cargo fmt
+        run: cargo fmt --all -- --check
+
+  v3-clippy:
+    name: V3 Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          toolchain: 1.88.0
+
+      - name: Run cargo clippy
+        run: cargo clippy --all --all-targets --all-features -- -D warnings
+
+  v3-golangci-lint:
+    name: V3 Golangci lint (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [nydusify, tests/e2e]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Golangci lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.7
+          working-directory: v3/${{ matrix.module }}
+
+  # ---------- Build / test jobs (from v3 ci.yml) ----------
+
+  v3-check:
+    name: V3 Cargo check
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          workspaces: v3
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -50,21 +120,21 @@ jobs:
           components: llvm-tools-preview
 
       - name: Run cargo check
-        run: |
-          cargo check --all --all-targets --all-features
+        run: cargo check --all --all-targets --all-features
 
-  test:
-    name: Run tests
+  v3-test:
+    name: V3 Run tests
     timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -84,18 +154,19 @@ jobs:
       - name: Run tests
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
-  fuse-e2e-tests:
-    name: Run FUSE e2e tests
+  v3-fuse-e2e-tests:
+    name: V3 Run FUSE e2e tests
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -108,39 +179,39 @@ jobs:
           go-version: '1.25.5'
 
       - name: Start local registry
+        working-directory: .
         run: |
           docker run -d --name registry -p 5000:5000 registry:2
           timeout 30 bash -c 'until curl -sf http://localhost:5000/v2/; do sleep 1; done'
 
       - name: Install filesystem test dependencies
+        working-directory: .
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq acl attr erofs-utils fuse3 xfsprogs
 
       - name: Run e2e tests
-        run: |
-          make test-e2e
+        run: make test-e2e
 
       - name: Run the nydus-to-OCI round trip
-        run: |
-          make test-tooci
+        run: make test-tooci
 
       - name: Run read-only conformance tests
-        run: |
-          make test-fs
+        run: make test-fs
 
-  nbd-tests:
-    name: Run NBD tests
+  v3-nbd-tests:
+    name: V3 Run NBD tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -153,26 +224,27 @@ jobs:
           go-version: '1.25.5'
 
       - name: Load nbd and erofs kernel modules
+        working-directory: .
         run: |
           sudo modprobe nbd || true
           sudo modprobe erofs || true
 
       - name: Run NBD E2E tests
-        run: |
-          make test-nbd
+        run: make test-nbd
 
-  ublk-tests:
-    name: Run ublk tests
+  v3-ublk-tests:
+    name: V3 Run ublk tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -185,26 +257,27 @@ jobs:
           go-version: '1.25.5'
 
       - name: Load ublk_drv and erofs kernel modules
+        working-directory: .
         run: |
           sudo modprobe ublk_drv || true
           sudo modprobe erofs || true
 
       - name: Run ublk tests
-        run: |
-          make test-ublk
+        run: make test-ublk
 
-  bench-tests:
-    name: Run bench tests
+  v3-bench-tests:
+    name: V3 Run bench tests
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -217,36 +290,37 @@ jobs:
           go-version: '1.25.5'
 
       - name: Install fio
+        working-directory: .
         run: |
           sudo apt-get update
           sudo apt-get install -y fio
 
       - name: Install erofsfuse (for the optional erofsfuse column)
-        run: |
-          sudo bash tests/scripts/setup_erofsfuse.sh
+        run: sudo bash tests/scripts/setup_erofsfuse.sh
 
       - name: Load nbd, ublk_drv and erofs kernel modules
+        working-directory: .
         run: |
           sudo modprobe nbd || true
           sudo modprobe ublk_drv || true
           sudo modprobe erofs || true
 
       - name: Run bench tests
-        run: |
-          make test-bench
+        run: make test-bench
 
-  uffd-tests:
-    name: Run UFFD tests
+  v3-uffd-tests:
+    name: V3 Run UFFD tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -259,6 +333,7 @@ jobs:
           go-version: '1.25.5'
 
       - name: Load erofs kernel module and install erofs-utils
+        working-directory: .
         run: |
           sudo modprobe erofs || true
           sudo apt-get update -qq
@@ -268,28 +343,29 @@ jobs:
         run: |
           make test-uffd \
             UFFD_REQUIRE=1 \
-            UFFD_EVIDENCE_DIR="$GITHUB_WORKSPACE/uffd-evidence"
+            UFFD_EVIDENCE_DIR="${{ github.workspace }}/v3/uffd-evidence"
 
       - name: Upload failure evidence
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: uffd-evidence
-          path: uffd-evidence/
+          name: v3-uffd-evidence
+          path: v3/uffd-evidence/
           if-no-files-found: ignore
 
-  fanotify-tests:
-    name: Run fanotify tests
+  v3-fanotify-tests:
+    name: V3 Run fanotify tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          workspaces: v3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -302,14 +378,14 @@ jobs:
           go-version: '1.25.5'
 
       - name: Load erofs kernel module
-        run: |
-          sudo modprobe erofs || true
+        working-directory: .
+        run: sudo modprobe erofs || true
 
       - name: Start local registry
+        working-directory: .
         run: |
           docker run -d --name registry -p 5000:5000 registry:2
           timeout 30 bash -c 'until curl -sf http://localhost:5000/v2/; do sleep 1; done'
 
       - name: Run fanotify E2E tests
-        run: |
-          make test-fanotify
+        run: make test-fanotify
