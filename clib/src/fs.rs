@@ -249,7 +249,10 @@ mod tests {
         let fs = unsafe {
             nydus_open_rafs_default(bootstrap.as_ptr(), blob_dir.as_ptr() as *const c_char)
         };
-        assert_ne!(fs, NYDUS_INVALID_FS_HANDLE, "failed to open RAFS filesystem");
+        assert_ne!(
+            fs, NYDUS_INVALID_FS_HANDLE,
+            "failed to open RAFS filesystem"
+        );
         unsafe { nydus_close_rafs(fs) };
     }
 }
