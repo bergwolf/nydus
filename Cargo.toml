@@ -141,6 +141,7 @@ members = [
     "upgrade",
     "utils",
 ]
+exclude = ["v3"]
 
 [workspace.dependencies]
 # rust-vmm crates

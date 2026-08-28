@@ -170,9 +170,12 @@ pub unsafe extern "C" fn nydus_open_rafs_default(
 /// `nydus_close_rafs()`, otherwise it may cause panic.
 ///
 /// # Safety
-/// Caller needs to ensure `handle` is valid, otherwise it may cause memory access violation.
+/// Caller needs to ensure `handle` is valid or null. Passing a null handle is a no-op.
 #[no_mangle]
 pub unsafe extern "C" fn nydus_close_rafs(handle: NydusFsHandle) {
+    if handle == null::<FileSystemState>() as usize {
+        return;
+    }
     let mut fs = Box::from_raw(handle as *mut FileSystemState);
     assert_eq!(fs.magic, NYDUS_FS_HANDLE_MAGIC);
     fs.magic -= 0x4fdf_03cd_ae34_9d9a;
@@ -246,6 +249,10 @@ mod tests {
         let fs = unsafe {
             nydus_open_rafs_default(bootstrap.as_ptr(), blob_dir.as_ptr() as *const c_char)
         };
+        assert_ne!(
+            fs, NYDUS_INVALID_FS_HANDLE,
+            "failed to open RAFS filesystem"
+        );
         unsafe { nydus_close_rafs(fs) };
     }
 }

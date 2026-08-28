@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = ["nydus", "nydus-backend", "nydus-config", "nydus-core", "nydus-error", "nydus-format", "nydus-storage", "nydus-telemetry"]
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive", "env", "string"] }
+libc = "0.2"
+memmap2 = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3.1.0"
+thiserror = "2"
+tokio = "1"
+tracing = "0.1"
+xattr = "1"
+
+[profile.bench]
+debug = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+strip = false
+incremental = true
+
+[profile.release]
+opt-level = 3
+strip = "symbols"
+lto = "fat"
+panic = "abort"
+codegen-units = 1
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+panic = "unwind"
