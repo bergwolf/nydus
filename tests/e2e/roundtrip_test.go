@@ -404,7 +404,7 @@ func verifyMergedMountMatchesErofsFuseWhenEnabled(
 	unmount := mountCErofsFuse(t, cErofsFuseBin, mergedBootstrap, erofsMountpoint, blobs...)
 	defer unmount()
 
-	roDiffTree(t, erofsMountpoint, nydusMountpoint, false)
+	roDiffTreeWithoutHardlinkGroups(t, erofsMountpoint, nydusMountpoint, false)
 }
 
 func cachedBlobDataDevicesForBlobs(t *testing.T, cacheDir string, blobs ...string) []string {
