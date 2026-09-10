@@ -381,7 +381,7 @@ func TestMergedMountKernelErofsMatchesNydusFuse(t *testing.T) {
 	nativeMountpoint := mountNativeErofs(
 		t,
 		mergedBootstrap,
-		cachedBlobDataDevicesForBootstrap(t, mergedBootstrap, cacheDir)...,
+		cachedBlobDataDevicesForBlobs(t, cacheDir, layer1Blob, layer2Blob, layer3Blob)...,
 	)
 	roDiffTree(t, nativeMountpoint, nydusMountpoint, true)
 }
@@ -415,22 +415,6 @@ func cachedBlobDataDevicesForBlobs(t *testing.T, cacheDir string, blobs ...strin
 	devices := make([]string, 0, len(blobs))
 	for _, blob := range blobs {
 		blobID := fullBlobDigest(t, blob)
-		cachedBlob := filepath.Join(cacheDir, blobID+".blob.data")
-		require.FileExists(t, cachedBlob, "cached uncompressed blob data should exist after nydus cached mount")
-		devices = append(devices, cachedBlob)
-	}
-	return devices
-}
-
-func cachedBlobDataDevicesForBootstrap(t *testing.T, bootstrap, cacheDir string) []string {
-	t.Helper()
-
-	deviceArgs, err := erofsDeviceArgs(bootstrap, "")
-	require.NoError(t, err)
-
-	devices := make([]string, 0, len(deviceArgs))
-	for _, arg := range deviceArgs {
-		blobID := filepath.Base(strings.TrimPrefix(arg, "--device="))
 		cachedBlob := filepath.Join(cacheDir, blobID+".blob.data")
 		require.FileExists(t, cachedBlob, "cached uncompressed blob data should exist after nydus cached mount")
 		devices = append(devices, cachedBlob)
