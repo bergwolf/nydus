@@ -122,7 +122,7 @@ jobs:
 
       - name: Run e2e tests
         run: |
-          make test-e2e
+          make test-e2e NYDUSFS_RUN_EROFS_COMPAT=1
 
       - name: Run the nydus-to-OCI round trip
         run: |
