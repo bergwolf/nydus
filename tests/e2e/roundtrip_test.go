@@ -24,8 +24,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const nydusRunErofsCompatEnv = "NYDUSFS_RUN_EROFS_COMPAT"
-
 func erofsKernelCompatibilitySkipReason(release, filesystems string) (string, error) {
 	var major, minor int
 	if _, err := fmt.Sscanf(release, "%d.%d", &major, &minor); err != nil {
@@ -313,12 +311,6 @@ func TestMergedMount(t *testing.T) {
 		roDiffTree(t, expectedDir, mountpoint, true)
 		verifyWhiteoutResults(t, mountpoint)
 		verifyBlobCacheArtifacts(t, cacheDir, layer1Blob, layer2Blob, layer3Blob)
-		verifyMergedMountMatchesErofsFuseWhenEnabled(
-			t,
-			mergedBootstrap,
-			mountpoint,
-			cachedBlobDataDevicesForBlobs(t, cacheDir, layer1Blob, layer2Blob, layer3Blob)...,
-		)
 		pauseMergeDebugIfRequested(t, mountpoint)
 	}()
 }
@@ -386,32 +378,12 @@ func TestMergedMountKernelErofsMatchesNydusFuse(t *testing.T) {
 	roDiffTree(t, nativeMountpoint, nydusMountpoint, true)
 }
 
-func verifyMergedMountMatchesErofsFuseWhenEnabled(
-	t *testing.T,
-	mergedBootstrap string,
-	nydusMountpoint string,
-	blobs ...string,
-) {
-	t.Helper()
-	if os.Getenv(nydusRunErofsCompatEnv) != "1" {
-		t.Logf("Skipping erofsfuse compatibility step; set %s=1 to enable", nydusRunErofsCompatEnv)
-		return
-	}
-
-	setupCErofsFuse(t)
-	cErofsFuseBin := mustLookupCErofsFuse(t)
-	erofsMountpoint := filepath.Join(t.TempDir(), "erofsfuse-mnt")
-	unmount := mountCErofsFuse(t, cErofsFuseBin, mergedBootstrap, erofsMountpoint, blobs...)
-	defer unmount()
-
-	roDiffTreeWithoutHardlinkGroups(t, erofsMountpoint, nydusMountpoint, false)
-}
-
 func cachedBlobDataDevicesForBlobs(t *testing.T, cacheDir string, blobs ...string) []string {
 	t.Helper()
 
-	// erofsfuse consumes plain external devices. Nydus builds zstd-compressed
-	// full blobs, so compat mode must use the cache files populated by nydus fuse.
+	// The kernel EROFS mount consumes plain external devices. Nydus builds
+	// zstd-compressed full blobs, so this path uses cache files populated by
+	// nydus fuse as decoded .blob.data devices.
 	devices := make([]string, 0, len(blobs))
 	for _, blob := range blobs {
 		blobID := fullBlobDigest(t, blob)

@@ -26,14 +26,6 @@ const roFullReadLimit = 64 << 20
 // compareMtimeNsec is false when comparing against an image built by
 // mkfs.erofs, whose compact inodes carry no sub-second mtime.
 func roDiffTree(t *testing.T, src, mnt string, compareMtimeNsec bool) {
-	roDiffTreeWithOptions(t, src, mnt, compareMtimeNsec, true)
-}
-
-func roDiffTreeWithoutHardlinkGroups(t *testing.T, src, mnt string, compareMtimeNsec bool) {
-	roDiffTreeWithOptions(t, src, mnt, compareMtimeNsec, false)
-}
-
-func roDiffTreeWithOptions(t *testing.T, src, mnt string, compareMtimeNsec, compareHardlinkGroups bool) {
 	t.Helper()
 	// Deliberately serial: callers unmount with a defer, and a parallel subtest
 	// would not run until after that defer had already fired.
@@ -95,13 +87,11 @@ func roDiffTreeWithOptions(t *testing.T, src, mnt string, compareMtimeNsec, comp
 		})
 	})
 
-	if compareHardlinkGroups {
-		t.Run("HardlinkGroups", func(t *testing.T) {
-			// Names sharing an inode in the source must share one in the mount,
-			// and names that do not must not.
-			require.Equal(t, roInodeGroups(t, src), roInodeGroups(t, mnt))
-		})
-	}
+	t.Run("HardlinkGroups", func(t *testing.T) {
+		// Names sharing an inode in the source must share one in the mount,
+		// and names that do not must not.
+		require.Equal(t, roInodeGroups(t, src), roInodeGroups(t, mnt))
+	})
 
 	t.Run("Dirents", func(t *testing.T) {
 		roWalkPairs(t, src, mnt, func(rel, srcPath, mntPath string) {
