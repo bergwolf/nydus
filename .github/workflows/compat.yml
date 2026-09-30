@@ -5,26 +5,19 @@ name: Compatibility
 # change must be checked and read by the last released version.
 
 on:
-  push:
-    branches: [main, release-*, v3]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "LICENSE*"
   pull_request:
-    branches: [main, release-*, v3]
+    branches: [v3]
     paths-ignore:
       - "**.md"
       - "docs/**"
       - "LICENSE*"
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
@@ -43,30 +36,78 @@ jobs:
       matrix:
         baseline: [v3.0.0-beta.1]
     env:
-      BASELINE_DIR: .compat/${{ matrix.baseline }}
-      BASELINE_NYDUS: ${{ github.workspace }}/.compat/${{ matrix.baseline }}/target/release/nydus
+      BASELINE: ${{ matrix.baseline }}
+      BASELINE_NYDUS: ${{ github.workspace }}/.compat/${{ matrix.baseline }}/bin/nydus
+      BASELINE_IMAGES: ${{ github.workspace }}/.compat/${{ matrix.baseline }}/images
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Checkout ${{ matrix.baseline }}
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ env.BASELINE_REPOSITORY }}
-          ref: ${{ matrix.baseline }}
-          path: ${{ env.BASELINE_DIR }}
-          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-          workspaces: |
-            . -> target
-            ${{ env.BASELINE_DIR }} -> target
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Build nydus from this change
+        id: build-current
+        run: |
+          make release
+          ./target/release/nydus --version
+
+      - name: Resolve ${{ matrix.baseline }}
+        id: baseline
+        run: |
+          refs=$(git ls-remote "https://github.com/${BASELINE_REPOSITORY}" "refs/tags/${BASELINE}" "refs/tags/${BASELINE}^{}")
+          # An annotated tag peels to its commit on the ^{} line.
+          sha=$(awk -v tag="refs/tags/${BASELINE}" '$2 == tag "^{}" { peeled = $1 } $2 == tag { plain = $1 } END { print peeled ? peeled : plain }' <<<"${refs}")
+          if [ -z "${sha}" ]; then
+            echo "::error::tag ${BASELINE} not found in ${BASELINE_REPOSITORY}"
+            exit 1
+          fi
+          . /etc/os-release
+          echo "sha=${sha}" >>"${GITHUB_OUTPUT}"
+          echo "platform=${ID}-${VERSION_ID}-${RUNNER_ARCH}" >>"${GITHUB_OUTPUT}"
+          echo "${BASELINE} is ${BASELINE_REPOSITORY}@${sha}"
+
+      # The released binary never changes, so it is built once per runner
+      # platform and restored from the cache afterwards.
+      - name: Restore nydus ${{ matrix.baseline }}
+        id: baseline-bin
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.BASELINE_NYDUS }}
+          key: compat-nydus-${{ steps.baseline.outputs.platform }}-${{ matrix.baseline }}-${{ steps.baseline.outputs.sha }}-v1
+
+      - name: Checkout ${{ matrix.baseline }}
+        if: steps.baseline-bin.outputs.cache-hit != 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.BASELINE_REPOSITORY }}
+          ref: ${{ steps.baseline.outputs.sha }}
+          path: .compat/src
+          persist-credentials: false
+
+      - name: Build nydus ${{ matrix.baseline }}
+        if: steps.baseline-bin.outputs.cache-hit != 'true'
+        working-directory: .compat/src
+        run: |
+          cargo build -p nydus --release --features cli
+          install -D target/release/nydus "${BASELINE_NYDUS}"
+
+      - name: Save nydus ${{ matrix.baseline }}
+        if: steps.baseline-bin.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.BASELINE_NYDUS }}
+          key: ${{ steps.baseline-bin.outputs.cache-primary-key }}
+
+      - name: Show nydus ${{ matrix.baseline }}
+        id: baseline-ready
+        run: |
+          "${BASELINE_NYDUS}" --version
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -78,24 +119,35 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq fuse3
 
-      - name: Build nydus ${{ matrix.baseline }}
-        id: build-baseline
-        working-directory: ${{ env.BASELINE_DIR }}
-        run: |
-          cargo build -p nydus --release --features cli
-          "${BASELINE_NYDUS}" --version
+      # The images the released binary builds, and the manifest of the trees
+      # they hold, only change with compat_images_test.go, which defines the
+      # corpus and the image layouts, so they are cached with its hash.
+      - name: Restore images built by ${{ matrix.baseline }}
+        id: baseline-images
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.BASELINE_IMAGES }}
+          key: compat-images-${{ steps.baseline.outputs.platform }}-${{ matrix.baseline }}-${{ steps.baseline.outputs.sha }}-${{ hashFiles('tests/e2e/compat_images_test.go', 'tests/e2e/corpus/**') }}-v1
 
-      - name: Build nydus from this change
-        id: build-current
+      - name: Build images with ${{ matrix.baseline }}
+        if: steps.baseline-images.outputs.cache-hit != 'true'
         run: |
-          make release
-          ./target/release/nydus --version
+          make test-compat-build COMPAT_BUILDER="${BASELINE_NYDUS}" COMPAT_IMAGES="${BASELINE_IMAGES}"
+          # The images are built as root; hand them back for the cache.
+          sudo chown -R "$(id -u):$(id -g)" "${BASELINE_IMAGES}"
 
-      - name: Build with ${{ matrix.baseline }}, check and read with this change
+      - name: Save images built by ${{ matrix.baseline }}
+        if: steps.baseline-images.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.BASELINE_IMAGES }}
+          key: ${{ steps.baseline-images.outputs.cache-primary-key }}
+
+      - name: Check and read images built by ${{ matrix.baseline }} with this change
         run: |
-          make test-compat COMPAT_BUILDER="${BASELINE_NYDUS}"
+          make test-compat-read COMPAT_IMAGES="${BASELINE_IMAGES}"
 
       - name: Build with this change, check and read with ${{ matrix.baseline }}
-        if: ${{ !cancelled() && steps.build-baseline.outcome == 'success' && steps.build-current.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build-current.outcome == 'success' && steps.baseline-ready.outcome == 'success' }}
         run: |
           make test-compat COMPAT_READER="${BASELINE_NYDUS}"
