@@ -1,0 +1,101 @@
+name: Compatibility
+
+# Cross-version on-disk compatibility: images built by the last released
+# version must be checked and read by this change, and images built by this
+# change must be checked and read by the last released version.
+
+on:
+  push:
+    branches: [main, release-*, v3]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+  pull_request:
+    branches: [main, release-*, v3]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+  # Release tags are published upstream, so forks check against the same
+  # baseline.
+  BASELINE_REPOSITORY: dragonflyoss/nydus
+
+jobs:
+  compat:
+    name: Compatibility with ${{ matrix.baseline }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        baseline: [v3.0.0-beta.1]
+    env:
+      BASELINE_DIR: .compat/${{ matrix.baseline }}
+      BASELINE_NYDUS: ${{ github.workspace }}/.compat/${{ matrix.baseline }}/target/release/nydus
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Checkout ${{ matrix.baseline }}
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.BASELINE_REPOSITORY }}
+          ref: ${{ matrix.baseline }}
+          path: ${{ env.BASELINE_DIR }}
+          persist-credentials: false
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+            ${{ env.BASELINE_DIR }} -> target
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+
+      - name: Install FUSE
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fuse3
+
+      - name: Build nydus ${{ matrix.baseline }}
+        id: build-baseline
+        working-directory: ${{ env.BASELINE_DIR }}
+        run: |
+          cargo build -p nydus --release --features cli
+          "${BASELINE_NYDUS}" --version
+
+      - name: Build nydus from this change
+        id: build-current
+        run: |
+          make release
+          ./target/release/nydus --version
+
+      - name: Build with ${{ matrix.baseline }}, check and read with this change
+        run: |
+          make test-compat COMPAT_BUILDER="${BASELINE_NYDUS}"
+
+      - name: Build with this change, check and read with ${{ matrix.baseline }}
+        if: ${{ !cancelled() && steps.build-baseline.outcome == 'success' && steps.build-current.outcome == 'success' }}
+        run: |
+          make test-compat COMPAT_READER="${BASELINE_NYDUS}"

@@ -374,6 +374,13 @@ make test
 # End-to-end integration tests (requires root and FUSE).
 make test-e2e
 
+# Cross-version on-disk compatibility (requires root and FUSE): build images
+# with COMPAT_BUILDER, then check, mount and export them with COMPAT_READER.
+# Both default to the in-tree build; CI runs both directions against the
+# v3.0.0-beta.1 release.
+make test-compat COMPAT_BUILDER=/abs/path/to/released/nydus
+make test-compat COMPAT_READER=/abs/path/to/released/nydus
+
 # UFFD service smoke test.
 make test-uffd
 
