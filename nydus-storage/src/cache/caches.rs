@@ -18,6 +18,7 @@ use nydus_backend::BlobBackend;
 use nydus_format::blob::BlobMetadataChunkGroupExtent;
 use nydus_format::utils::SHA256_DIGEST_SIZE;
 
+use super::remote::DecodedGroupCache;
 use super::{BlobCache, LocalBlobCache, RawDeviceBlobCache, RemoteBlobCache};
 
 /// A blob referenced by the bootstrap device table. The blob cache is opened
@@ -27,9 +28,11 @@ struct BlobSlot {
     blob_id: [u8; SHA256_DIGEST_SIZE],
     blob_index: u16,
     /// The local cache directory; `None` selects the diskless
-    /// [`RemoteBlobCache`], which serves every read from the backend.
+    /// [`RemoteBlobCache`], which serves reads from the backend.
     cache_dir: Option<PathBuf>,
     backend: Arc<dyn BlobBackend>,
+    /// Decoded chunk groups of the diskless caches, one budget for the set.
+    decoded_groups: Arc<DecodedGroupCache>,
     trace_recorder: Option<Arc<TraceRecorder>>,
     /// Double-checked lazy init: reads take the read lock (hot path), a cold
     /// slot takes the write lock and re-checks before opening. A failed open
@@ -59,7 +62,11 @@ impl BlobSlot {
                     self.backend.clone(),
                     self.trace_recorder.clone(),
                 )?),
-                None => Arc::new(RemoteBlobCache::open(self.blob_id, self.backend.clone())?),
+                None => Arc::new(RemoteBlobCache::open_with_group_cache(
+                    self.blob_id,
+                    self.backend.clone(),
+                    self.decoded_groups.clone(),
+                )?),
             }
         };
         *guard = Some(cache.clone());
@@ -82,14 +89,16 @@ impl BlobCaches {
     }
 
     /// Build the set from `(blob_index, blob_id)` pairs. When `cache_dir` is
-    /// `None` the blobs run diskless: every read fetches from the backend
-    /// directly and nothing is written to disk.
+    /// `None` the blobs run diskless: reads fetch from the backend directly,
+    /// nothing is written to disk, and recently decoded chunk groups are kept
+    /// in one bounded in-memory cache shared by the whole set.
     pub fn new(
         entries: impl IntoIterator<Item = (u16, [u8; SHA256_DIGEST_SIZE])>,
         backend: Arc<dyn BlobBackend>,
         cache_dir: Option<&Path>,
         trace_recorder: Option<Arc<TraceRecorder>>,
     ) -> io::Result<Self> {
+        let decoded_groups = Arc::new(DecodedGroupCache::default());
         let slots = entries
             .into_iter()
             .map(|(blob_index, blob_id)| {
@@ -100,6 +109,7 @@ impl BlobCaches {
                         blob_index,
                         cache_dir: cache_dir.map(Path::to_path_buf),
                         backend: backend.clone(),
+                        decoded_groups: decoded_groups.clone(),
                         trace_recorder: trace_recorder.clone(),
                         cache: RwLock::new(None),
                     },
