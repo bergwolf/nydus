@@ -3,9 +3,20 @@ name: Compatibility
 # Cross-version on-disk compatibility: images built by the last released
 # version must be checked and read by this change, and images built by this
 # change must be checked and read by the last released version.
+#
+# The checks run on pull requests to v3. Caches saved by a pull request run
+# are scoped to that pull request, while caches saved on v3 can be restored by
+# every pull request into it, so pushes to v3 only build and cache the
+# released binary and the images it builds when they are missing.
 
 on:
   pull_request:
+    branches: [v3]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+  push:
     branches: [v3]
     paths-ignore:
       - "**.md"
@@ -39,23 +50,10 @@ jobs:
       BASELINE: ${{ matrix.baseline }}
       BASELINE_NYDUS: ${{ github.workspace }}/.compat/${{ matrix.baseline }}/bin/nydus
       BASELINE_IMAGES: ${{ github.workspace }}/.compat/${{ matrix.baseline }}/images
+      CHECK: ${{ github.event_name == 'pull_request' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Build nydus from this change
-        id: build-current
-        run: |
-          make release
-          ./target/release/nydus --version
 
       - name: Resolve ${{ matrix.baseline }}
         id: baseline
@@ -80,6 +78,28 @@ jobs:
         with:
           path: ${{ env.BASELINE_NYDUS }}
           key: compat-nydus-${{ steps.baseline.outputs.platform }}-${{ matrix.baseline }}-${{ steps.baseline.outputs.sha }}-v1
+
+      # The images the released binary builds, and the manifest of the trees
+      # they hold, only change with compat_images_test.go, which defines the
+      # corpus and the image layouts, so they are cached with its hash. A push
+      # only needs to know whether they are there.
+      - name: Restore images built by ${{ matrix.baseline }}
+        id: baseline-images
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.BASELINE_IMAGES }}
+          key: compat-images-${{ steps.baseline.outputs.platform }}-${{ matrix.baseline }}-${{ steps.baseline.outputs.sha }}-${{ hashFiles('tests/e2e/compat_images_test.go', 'tests/e2e/corpus/**') }}-v1
+          lookup-only: ${{ env.CHECK != 'true' }}
+
+      - name: Install Rust toolchain
+        if: env.CHECK == 'true' || steps.baseline-bin.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        if: env.CHECK == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Checkout ${{ matrix.baseline }}
         if: steps.baseline-bin.outputs.cache-hit != 'true'
@@ -110,24 +130,10 @@ jobs:
           "${BASELINE_NYDUS}" --version
 
       - name: Set up Go
+        if: env.CHECK == 'true' || steps.baseline-images.outputs.cache-hit != 'true'
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.5'
-
-      - name: Install FUSE
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq fuse3
-
-      # The images the released binary builds, and the manifest of the trees
-      # they hold, only change with compat_images_test.go, which defines the
-      # corpus and the image layouts, so they are cached with its hash.
-      - name: Restore images built by ${{ matrix.baseline }}
-        id: baseline-images
-        uses: actions/cache/restore@v5
-        with:
-          path: ${{ env.BASELINE_IMAGES }}
-          key: compat-images-${{ steps.baseline.outputs.platform }}-${{ matrix.baseline }}-${{ steps.baseline.outputs.sha }}-${{ hashFiles('tests/e2e/compat_images_test.go', 'tests/e2e/corpus/**') }}-v1
 
       - name: Build images with ${{ matrix.baseline }}
         if: steps.baseline-images.outputs.cache-hit != 'true'
@@ -143,11 +149,27 @@ jobs:
           path: ${{ env.BASELINE_IMAGES }}
           key: ${{ steps.baseline-images.outputs.cache-primary-key }}
 
+      # Build this change even when the baseline failed, so the direction
+      # that does not need the failed part still runs.
+      - name: Build nydus from this change
+        id: build-current
+        if: ${{ !cancelled() && env.CHECK == 'true' }}
+        run: |
+          make release
+          ./target/release/nydus --version
+
+      - name: Install FUSE
+        if: ${{ !cancelled() && env.CHECK == 'true' }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fuse3
+
       - name: Check and read images built by ${{ matrix.baseline }} with this change
+        if: env.CHECK == 'true'
         run: |
           make test-compat-read COMPAT_IMAGES="${BASELINE_IMAGES}"
 
       - name: Build with this change, check and read with ${{ matrix.baseline }}
-        if: ${{ !cancelled() && steps.build-current.outcome == 'success' && steps.baseline-ready.outcome == 'success' }}
+        if: ${{ !cancelled() && env.CHECK == 'true' && steps.build-current.outcome == 'success' && steps.baseline-ready.outcome == 'success' }}
         run: |
           make test-compat COMPAT_READER="${BASELINE_NYDUS}"

@@ -382,7 +382,8 @@ make test-e2e
 make test-compat COMPAT_BUILDER=/abs/path/to/released/nydus
 make test-compat COMPAT_READER=/abs/path/to/released/nydus
 # The same in two runs, keeping the images in COMPAT_IMAGES (CI caches the
-# images the release builds).
+# images the release builds; pushes to v3 fill the cache that pull requests
+# into v3 share).
 make test-compat-build COMPAT_BUILDER=/abs/path/to/released/nydus COMPAT_IMAGES=/abs/path/to/images
 make test-compat-read COMPAT_IMAGES=/abs/path/to/images
 
