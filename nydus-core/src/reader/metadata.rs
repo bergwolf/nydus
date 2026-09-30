@@ -1,8 +1,10 @@
 use std::io;
 
 use nydus_format::erofs::{
-    cast_ref, erofs_xattr_prefix, ErofsDirent, ErofsInode, EROFS_BLOCK_SIZE, EROFS_DIRENT_SIZE,
-    EROFS_INODE_EXTENDED_SIZE, EROFS_INODE_FLAT_INLINE, EROFS_INODE_FLAT_PLAIN,
+    cast_ref, erofs_xattr_prefix, mode_to_erofs_file_type, ErofsDirent, ErofsInode,
+    EROFS_BLOCK_SIZE, EROFS_DIRENT_SIZE, EROFS_FT_REG_FILE, EROFS_FT_SYMLINK,
+    EROFS_INODE_COMPACT_SIZE, EROFS_INODE_EXTENDED_SIZE, EROFS_INODE_FLAT_INLINE,
+    EROFS_INODE_FLAT_PLAIN, EROFS_INODE_LAYOUT_COMPACT, EROFS_I_VERSION_BIT,
     EROFS_XATTR_ENTRY_HEADER_SIZE, EROFS_XATTR_IBODY_HEADER_SIZE,
 };
 use nydus_format::utils::align_up_usize;
@@ -12,9 +14,21 @@ use super::{ErofsReader, RawDirEntry};
 impl ErofsReader {
     /// Get a zero-copy inode view from the mmap.
     pub fn inode(&self, nid: u64) -> io::Result<ErofsInode<'_>> {
-        let offset = self.nid_to_offset(nid);
-        let data = self.mmap_slice(offset, EROFS_INODE_EXTENDED_SIZE)?;
-        ErofsInode::parse(data)
+        self.inode_at(self.nid_to_offset(nid))
+    }
+
+    /// Parse the inode starting at image byte `offset`.
+    pub(crate) fn inode_at(&self, offset: usize) -> io::Result<ErofsInode<'_>> {
+        // A compact inode may end the image, so read only as many bytes as
+        // its layout bit says it has.
+        let head = self.mmap_slice(offset, EROFS_INODE_COMPACT_SIZE)?;
+        let i_format = u16::from_le_bytes([head[0], head[1]]);
+        let size = if (i_format >> EROFS_I_VERSION_BIT) & 1 == EROFS_INODE_LAYOUT_COMPACT {
+            EROFS_INODE_COMPACT_SIZE
+        } else {
+            EROFS_INODE_EXTENDED_SIZE
+        };
+        ErofsInode::parse(self.mmap_slice(offset, size)?)
     }
 
     /// Size of a FLAT_INLINE inode's block-backed region; bytes past it live
@@ -83,12 +97,18 @@ impl ErofsReader {
                         io::Error::new(io::ErrorKind::InvalidData, "invalid directory entry")
                     })?;
                 let de: &ErofsDirent = cast_ref(&block_data[i * EROFS_DIRENT_SIZE..]);
+                // The kernel reports a type it does not know as DT_UNKNOWN,
+                // leaving the answer to the inode's mode; take it from there.
+                let file_type = match de.file_type() {
+                    known @ EROFS_FT_REG_FILE..=EROFS_FT_SYMLINK => known,
+                    _ => mode_to_erofs_file_type(self.inode(entry_nid)?.mode()),
+                };
                 let next_offset = if i + 1 < count {
                     pos + ((i + 1) * EROFS_DIRENT_SIZE) as u64
                 } else {
                     pos + block_len as u64
                 };
-                if !cb(entry_nid, de.file_type(), name, next_offset)? {
+                if !cb(entry_nid, file_type, name, next_offset)? {
                     return Ok(());
                 }
             }
@@ -385,7 +405,7 @@ impl ErofsReader {
 mod tests {
     use super::*;
     use nydus_format::erofs::{
-        ErofsInodeCompact, ErofsSuperblock, EROFS_FT_REG_FILE, EROFS_SUPER_OFFSET,
+        ErofsInodeCompact, ErofsSuperblock, EROFS_FT_DIR, EROFS_FT_REG_FILE, EROFS_SUPER_OFFSET,
     };
     use std::io::Write;
 
@@ -463,6 +483,20 @@ mod tests {
             seen,
             vec![(3, EROFS_FT_REG_FILE, b"z".to_vec(), inode.size())]
         );
+    }
+
+    #[test]
+    fn directory_iteration_takes_unknown_dirent_types_from_the_inode_mode() {
+        for file_type in [0, 99] {
+            let mut data = ErofsDirent::new(0, EROFS_DIRENT_SIZE as u16, file_type)
+                .as_bytes()
+                .to_vec();
+            data.push(b'd');
+            let reader = directory_reader(&data);
+            let entries = reader.read_dir(0, &reader.inode(0).unwrap()).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].file_type, EROFS_FT_DIR);
+        }
     }
 
     #[test]
